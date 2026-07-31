@@ -67,13 +67,19 @@ impl WebBridgeClient {
                 "WebBridge 命令 {action} 失败（HTTP {status}）: {json}"
             )));
         }
-        // daemon 业务错误：success=false 或带 error 字段
-        if json.get("success") == Some(&JsonValue::Bool(false)) {
+        // daemon 信封：{"ok": bool, "data": {...}}；先判 ok，再解出 data
+        if json.get("ok") == Some(&JsonValue::Bool(false)) {
             return Err(DomainError::Infrastructure(format!(
                 "WebBridge 命令 {action} 失败: {json}"
             )));
         }
-        Ok(json)
+        let data = json.get("data").cloned().unwrap_or(json);
+        if data.get("success") == Some(&JsonValue::Bool(false)) {
+            return Err(DomainError::Infrastructure(format!(
+                "WebBridge 命令 {action} 失败: {data}"
+            )));
+        }
+        Ok(data)
     }
 
     /// 在页面里执行 JS，返回其返回值（字符串）
@@ -203,9 +209,9 @@ const EXTRACT_JS: &str = r#"(() => {
       .split('\n').map(s => s.trim()).filter(Boolean);
     const title = (a.getAttribute('title') || lines[0] || '').trim();
     if (!title) continue;
-    // 卖家：含「信用」或位于价格行之后的短文本，尽力而为，可为空
+    // 卖家：搜索卡片只展示信用等级（如「卖家信用极好」），没有昵称
     const priceIdx = lines.findIndex(l => /[¥￥]/.test(l));
-    const seller = lines.slice(priceIdx + 1).find(l => l.length <= 20) || '';
+    const seller = lines.slice(priceIdx + 1).find(l => l.includes('信用')) || '';
     out.push({ title: title.slice(0, 120), price: parseFloat(m[1]), url: href, seller });
     if (out.length >= 40) break;
   }

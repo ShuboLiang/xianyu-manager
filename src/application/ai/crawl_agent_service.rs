@@ -19,8 +19,8 @@ use crate::domain::repository::{ItemRepository, ProductRepository};
 
 /// AI 单次最多提交的有效商品数
 pub const MAX_SELECTED: usize = 8;
-/// agent 最大轮数：搜索 1 轮 + 提交 1 轮 + 总结 1 轮，留 1 轮容错
-const MAX_ROUNDS: u32 = 4;
+/// agent 最大轮数：搜索（含换关键词重试）+ 提交 + 总结，留足容错
+const MAX_ROUNDS: u32 = 6;
 
 /// 一次抓取落库的统计结果（由 save_crawl_result 工具写入，供 worker 读取）
 #[derive(Debug, Clone, Copy)]
