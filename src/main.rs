@@ -10,8 +10,10 @@ use std::sync::Arc;
 use application::crawl_service::CrawlService;
 use application::item_service::ItemService;
 use application::ports::XianYuGateway;
+use application::tag_service::TagService;
 use infrastructure::config::Config;
 use infrastructure::persistence::memory::{InMemoryCrawlTaskRepository, InMemoryItemRepository};
+use infrastructure::persistence::sqlite::SqliteTagRepository;
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
 use interfaces::AppState;
 
@@ -30,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
     // infrastructure：仓储与网关实现
     let item_repo = Arc::new(InMemoryItemRepository::default());
     let task_repo = Arc::new(InMemoryCrawlTaskRepository::default());
+    let tag_repo = Arc::new(SqliteTagRepository::connect(&config.database_path).await?);
     let gateway: Arc<dyn XianYuGateway> = match config.gateway.as_str() {
         "http" => Arc::new(HttpXianYuGateway::new(std::env::var("XIANYU_COOKIE").ok())),
         _ => Arc::new(MockXianYuGateway),
@@ -38,12 +41,14 @@ async fn main() -> anyhow::Result<()> {
     // application：用例服务
     let crawl_service = Arc::new(CrawlService::new(gateway, item_repo.clone(), task_repo));
     let item_service = Arc::new(ItemService::new(item_repo));
+    let tag_service = Arc::new(TagService::new(tag_repo));
 
     // interfaces：HTTP 路由
     let app = interfaces::build_router(
         AppState {
             crawl_service,
             item_service,
+            tag_service,
         },
         &config.static_dir,
     );

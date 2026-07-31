@@ -9,6 +9,8 @@ pub struct Config {
     pub static_dir: String,
     /// 网关实现：`mock` 使用假数据便于开发，`http` 走真实闲鱼接口（未实现）
     pub gateway: String,
+    /// SQLite 数据库文件路径
+    pub database_path: String,
 }
 
 impl Config {
@@ -21,6 +23,8 @@ impl Config {
                 .unwrap_or(3000),
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".into()),
             gateway: std::env::var("GATEWAY").unwrap_or_else(|_| "mock".into()),
+            database_path: std::env::var("DATABASE_PATH")
+                .unwrap_or_else(|_| "data/xianyu.db".into()),
         }
     }
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::crawl_task::{CrawlTask, TaskStatus};
 use crate::domain::item::Item;
+use crate::domain::tag::Tag;
 
 #[derive(Debug, Deserialize)]
 pub struct CrawlRequest {
@@ -66,6 +67,44 @@ impl From<Item> for ItemResponse {
             seller: it.seller,
             url: it.url,
             crawled_at: it.crawled_at,
+        }
+    }
+}
+
+// ---------- 标签 ----------
+
+#[derive(Debug, Deserialize)]
+pub struct TagCreateRequest {
+    pub name: String,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TagUpdateRequest {
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TagResponse {
+    pub id: i64,
+    pub name: String,
+    pub enabled: bool,
+    pub remark: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+impl From<Tag> for TagResponse {
+    fn from(t: Tag) -> Self {
+        Self {
+            id: t.id,
+            name: t.name.as_str().to_string(),
+            enabled: t.enabled,
+            remark: t.remark,
+            created_at: t.created_at,
+            updated_at: t.updated_at,
         }
     }
 }

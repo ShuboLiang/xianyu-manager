@@ -18,6 +18,7 @@ cargo run        # 默认 http://127.0.0.1:3000
 | `STATIC_DIR` | `static` | 前端静态文件目录 |
 | `GATEWAY` | `mock` | `mock`=假数据网关，`http`=真实闲鱼接口（未实现） |
 | `XIANYU_COOKIE` | - | `GATEWAY=http` 时的闲鱼登录态 Cookie |
+| `DATABASE_PATH` | `data/xianyu.db` | SQLite 数据库文件路径（目录自动创建） |
 
 ## 架构（DDD-Lite，四层）
 
@@ -29,21 +30,25 @@ src/
 │   ├── mod.rs           #   build_router() + AppState（应用服务句柄）
 │   ├── dto.rs           #   HTTP 请求/响应结构，与 domain 模型解耦
 │   ├── crawl_handler.rs #   POST /api/crawl、GET /api/crawl/{id}
-│   └── item_handler.rs  #   GET /api/items
+│   ├── item_handler.rs  #   GET /api/items
+│   └── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway（防腐层）
 │   ├── crawl_service.rs #   创建抓取任务 → 后台 tokio task 逐页抓取 → 落库
-│   └── item_service.rs  #   商品列表查询
+│   ├── item_service.rs  #   商品列表查询
+│   └── tag_service.rs   #   标签 CRUD（重名冲突校验、部分字段更新）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
 │   ├── crawl_task.rs    #   CrawlTask 实体：状态流转规则只写在实体方法里
-│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository
+│   ├── tag.rs           #   Tag 实体（TagName 值对象），enabled=false 的标签不参与抓取
+│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository
 │   └── error.rs         #   DomainError，全项目统一错误语义
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
     ├── xianyu_gateway.rs#   XianYuGateway 实现：Mock / Http（真实接口待实现）
     └── persistence/
-        └── memory.rs    #   内存仓储（重启即失，骨架阶段用）
+        ├── memory.rs    #   内存仓储：商品、抓取任务（重启即失）
+        └── sqlite.rs    #   SqliteTagRepository：标签持久化（建表 IF NOT EXISTS）
 static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 axum 托管）
 ```
 
@@ -52,7 +57,8 @@ static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 a
 - **抓取是异步任务，不是同步请求**：`POST /api/crawl` 只创建任务并返回句柄，后台 tokio task 执行抓取，前端轮询 `GET /api/crawl/{id}`。防止多页抓取时 HTTP 超时。
 - **任务状态机**：`Pending → Running → Done/Failed`。只有 Pending 能 `start()`，只有 Running 能 `finish()`；规则在 `CrawlTask` 实体方法里，不允许在别处直接改状态。
 - **闲鱼网关是端口+实现（防腐层）**：`XianYuGateway` trait 定义在 `application/ports.rs`，实现（登录态、mtop 签名、解析）在 `infrastructure/xianyu_gateway.rs`。开发用 `GATEWAY=mock`。
-- **仓储端口**：`ItemRepository` / `CrawlTaskRepository` trait 在 domain，当前实现是内存版。接 SQLite 时在 `infrastructure/persistence/` 新增实现并在 `main.rs` 替换，内层零改动。
+- **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。商品和任务目前是内存实现；标签已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
+- **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
 
 ## 扩展约定
 

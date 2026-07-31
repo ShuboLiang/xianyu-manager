@@ -1,5 +1,7 @@
 const statusEl = document.getElementById('status');
 const tableEl = document.getElementById('itemTable');
+const tagTableEl = document.getElementById('tagTable');
+let editingTagId = null;
 
 async function checkHealth() {
     try {
@@ -80,5 +82,104 @@ async function pollTask(taskId) {
 document.getElementById('crawlBtn').addEventListener('click', startCrawl);
 document.getElementById('refreshBtn').addEventListener('click', loadItems);
 
+// ---------- 标签管理 ----------
+
+function renderTags(tags) {
+    if (!tags || tags.length === 0) {
+        tagTableEl.innerHTML = '<tr><td colspan="4" class="empty">暂无标签</td></tr>';
+        return;
+    }
+    tagTableEl.innerHTML = tags.map(t => `
+        <tr>
+            <td>${t.name}</td>
+            <td>${t.enabled ? '启用' : '停用'}</td>
+            <td>${t.remark || '-'}</td>
+            <td>
+                <a href="#" onclick="editTag(${t.id}); return false;">编辑</a>
+                <a href="#" onclick="toggleTag(${t.id}, ${t.enabled}); return false;">${t.enabled ? '停用' : '启用'}</a>
+                <a href="#" onclick="deleteTag(${t.id}); return false;">删除</a>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function loadTags() {
+    const res = await fetch('/api/tags');
+    const body = await res.json();
+    renderTags(body.data);
+}
+
+async function submitTag() {
+    const name = document.getElementById('tagName').value.trim();
+    const remark = document.getElementById('tagRemark').value.trim();
+    if (!name) {
+        alert('标签名不能为空');
+        return;
+    }
+    const isEdit = editingTagId !== null;
+    const res = await fetch(isEdit ? `/api/tags/${editingTagId}` : '/api/tags', {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, remark: remark || null }),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert((isEdit ? '更新' : '创建') + '失败: ' + body.message);
+        return;
+    }
+    resetTagForm();
+    loadTags();
+}
+
+async function editTag(id) {
+    const res = await fetch(`/api/tags/${id}`);
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('加载标签失败: ' + body.message);
+        return;
+    }
+    const t = body.data;
+    editingTagId = t.id;
+    document.getElementById('tagName').value = t.name;
+    document.getElementById('tagRemark').value = t.remark || '';
+    document.getElementById('tagSubmitBtn').textContent = '保存修改';
+    document.getElementById('tagCancelBtn').hidden = false;
+}
+
+async function toggleTag(id, enabled) {
+    const res = await fetch(`/api/tags/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !enabled }),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('切换状态失败: ' + body.message);
+    }
+    loadTags();
+}
+
+async function deleteTag(id) {
+    if (!confirm('确定删除该标签？')) return;
+    const res = await fetch(`/api/tags/${id}`, { method: 'DELETE' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('删除失败: ' + body.message);
+    }
+    loadTags();
+}
+
+function resetTagForm() {
+    editingTagId = null;
+    document.getElementById('tagName').value = '';
+    document.getElementById('tagRemark').value = '';
+    document.getElementById('tagSubmitBtn').textContent = '添加标签';
+    document.getElementById('tagCancelBtn').hidden = true;
+}
+
+document.getElementById('tagSubmitBtn').addEventListener('click', submitTag);
+document.getElementById('tagCancelBtn').addEventListener('click', resetTagForm);
+
 checkHealth();
+loadTags();
 loadItems();

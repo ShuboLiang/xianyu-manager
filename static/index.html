@@ -14,6 +14,29 @@
 
     <main>
         <section class="card">
+            <h2>标签管理</h2>
+            <div class="form-row">
+                <input id="tagName" type="text" placeholder="标签名，如：二手相机">
+                <input id="tagRemark" type="text" placeholder="备注（可选）">
+                <button id="tagSubmitBtn">添加标签</button>
+                <button id="tagCancelBtn" class="btn-secondary" hidden>取消编辑</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>标签名</th>
+                        <th>状态</th>
+                        <th>备注</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="tagTable">
+                    <tr><td colspan="4" class="empty">暂无标签</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
             <h2>发起抓取</h2>
             <div class="form-row">
                 <input id="keyword" type="text" placeholder="搜索关键词，如：MacBook Pro">
