@@ -1,7 +1,10 @@
 const statusEl = document.getElementById('status');
 const tableEl = document.getElementById('itemTable');
 const tagTableEl = document.getElementById('tagTable');
+const productTableEl = document.getElementById('productTable');
 let editingTagId = null;
+let editingProductId = null;
+let cachedTags = [];
 
 async function checkHealth() {
     try {
@@ -106,7 +109,37 @@ function renderTags(tags) {
 async function loadTags() {
     const res = await fetch('/api/tags');
     const body = await res.json();
-    renderTags(body.data);
+    cachedTags = body.data || [];
+    renderTags(cachedTags);
+    renderTagOptions();
+}
+
+function renderTagOptions() {
+    const box = document.getElementById('productTagList');
+    const checked = new Set(
+        [...box.querySelectorAll('input:checked')].map(i => i.value)
+    );
+    if (cachedTags.length === 0) {
+        box.innerHTML = '<span class="muted">暂无标签可勾选</span>';
+        return;
+    }
+    box.innerHTML = cachedTags.map(t => `
+        <label class="tag-check">
+            <input type="checkbox" value="${t.id}" ${checked.has(String(t.id)) ? 'checked' : ''}>
+            ${t.name}
+        </label>
+    `).join('');
+}
+
+function selectedTagIds() {
+    return [...document.querySelectorAll('#productTagList input:checked')]
+        .map(i => Number(i.value));
+}
+
+function setSelectedTagIds(ids) {
+    document.querySelectorAll('#productTagList input').forEach(i => {
+        i.checked = ids.includes(Number(i.value));
+    });
 }
 
 async function submitTag() {
@@ -128,7 +161,7 @@ async function submitTag() {
         return;
     }
     resetTagForm();
-    loadTags();
+    loadTags().then(loadProducts);
 }
 
 async function editTag(id) {
@@ -156,17 +189,28 @@ async function toggleTag(id, enabled) {
     if (body.code !== 0) {
         alert('切换状态失败: ' + body.message);
     }
-    loadTags();
+    loadTags().then(loadProducts);
 }
 
 async function deleteTag(id) {
-    if (!confirm('确定删除该标签？')) return;
+    // 删除前提示该标签正被哪些商品使用（删除后这些商品将移除此标签）
+    const usageRes = await fetch(`/api/tags/${id}/products`);
+    const usageBody = await usageRes.json();
+    if (usageBody.code !== 0) {
+        alert('查询标签使用情况失败: ' + usageBody.message);
+        return;
+    }
+    const used = usageBody.data || [];
+    const hint = used.length === 0
+        ? '确定删除该标签？'
+        : `该标签正被 ${used.length} 个商品使用：\n${used.map(p => '· ' + p.name).join('\n')}\n\n删除后这些商品将移除此标签。确定删除？`;
+    if (!confirm(hint)) return;
     const res = await fetch(`/api/tags/${id}`, { method: 'DELETE' });
     const body = await res.json();
     if (body.code !== 0) {
         alert('删除失败: ' + body.message);
     }
-    loadTags();
+    loadTags().then(loadProducts);
 }
 
 function resetTagForm() {
@@ -180,6 +224,107 @@ function resetTagForm() {
 document.getElementById('tagSubmitBtn').addEventListener('click', submitTag);
 document.getElementById('tagCancelBtn').addEventListener('click', resetTagForm);
 
+// ---------- 待爬取商品管理 ----------
+
+function fmtPrice(v) {
+    return v === null || v === undefined ? '-' : '¥' + v.toFixed(2);
+}
+
+function fmtTime(unix) {
+    if (!unix) return '-';
+    return new Date(unix * 1000).toLocaleString('zh-CN', { hour12: false });
+}
+
+function renderProducts(products) {
+    if (!products || products.length === 0) {
+        productTableEl.innerHTML = '<tr><td colspan="9" class="empty">暂无商品</td></tr>';
+        return;
+    }
+    productTableEl.innerHTML = products.map(p => `
+        <tr>
+            <td>${p.name}</td>
+            <td>${p.tag_names.length ? p.tag_names.join('、') : '<span class="muted">无标签</span>'}</td>
+            <td>${fmtPrice(p.median_price)}</td>
+            <td>${fmtPrice(p.avg_price)}</td>
+            <td>${p.crawled_count ?? '-'}</td>
+            <td>${fmtTime(p.last_crawled_at)}</td>
+            <td>${fmtPrice(p.recycle_price)}</td>
+            <td>${p.remark || '-'}</td>
+            <td>
+                <a href="#" onclick="editProduct(${p.id}); return false;">编辑</a>
+                <a href="#" onclick="deleteProduct(${p.id}); return false;">删除</a>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function loadProducts() {
+    const res = await fetch('/api/products');
+    const body = await res.json();
+    renderProducts(body.data);
+}
+
+async function submitProduct() {
+    const name = document.getElementById('productName').value.trim();
+    const remark = document.getElementById('productRemark').value.trim();
+    if (!name) {
+        alert('商品名不能为空');
+        return;
+    }
+    const isEdit = editingProductId !== null;
+    const payload = { name, tag_ids: selectedTagIds(), remark: remark || null };
+    const res = await fetch(isEdit ? `/api/products/${editingProductId}` : '/api/products', {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert((isEdit ? '更新' : '创建') + '失败: ' + body.message);
+        return;
+    }
+    resetProductForm();
+    loadProducts();
+}
+
+async function editProduct(id) {
+    const res = await fetch(`/api/products/${id}`);
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('加载商品失败: ' + body.message);
+        return;
+    }
+    const p = body.data;
+    editingProductId = p.id;
+    document.getElementById('productName').value = p.name;
+    setSelectedTagIds(p.tag_ids);
+    document.getElementById('productRemark').value = p.remark || '';
+    document.getElementById('productSubmitBtn').textContent = '保存修改';
+    document.getElementById('productCancelBtn').hidden = false;
+}
+
+async function deleteProduct(id) {
+    if (!confirm('确定删除该商品？')) return;
+    const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('删除失败: ' + body.message);
+    }
+    loadProducts();
+}
+
+function resetProductForm() {
+    editingProductId = null;
+    document.getElementById('productName').value = '';
+    setSelectedTagIds([]);
+    document.getElementById('productRemark').value = '';
+    document.getElementById('productSubmitBtn').textContent = '添加商品';
+    document.getElementById('productCancelBtn').hidden = true;
+}
+
+document.getElementById('productSubmitBtn').addEventListener('click', submitProduct);
+document.getElementById('productCancelBtn').addEventListener('click', resetProductForm);
+
 checkHealth();
-loadTags();
+loadTags().then(loadProducts);
 loadItems();

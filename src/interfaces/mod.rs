@@ -3,6 +3,7 @@
 pub mod crawl_handler;
 pub mod dto;
 pub mod item_handler;
+pub mod product_handler;
 pub mod tag_handler;
 
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::application::crawl_service::CrawlService;
 use crate::application::item_service::ItemService;
+use crate::application::product_service::ProductService;
 use crate::application::tag_service::TagService;
 
 use dto::ApiResponse;
@@ -25,6 +27,7 @@ pub struct AppState {
     pub crawl_service: Arc<CrawlService>,
     pub item_service: Arc<ItemService>,
     pub tag_service: Arc<TagService>,
+    pub product_service: Arc<ProductService>,
 }
 
 /// 组装整个应用的路由：
@@ -42,6 +45,17 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
             get(tag_handler::get_tag)
                 .put(tag_handler::update_tag)
                 .delete(tag_handler::delete_tag),
+        )
+        .route("/tags/{id}/products", get(tag_handler::tag_products))
+        .route(
+            "/products",
+            get(product_handler::list_products).post(product_handler::create_product),
+        )
+        .route(
+            "/products/{id}",
+            get(product_handler::get_product)
+                .put(product_handler::update_product)
+                .delete(product_handler::delete_product),
         )
         .with_state(state);
 

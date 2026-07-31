@@ -1,0 +1,133 @@
+//! 用例：待爬取商品的增删改查。
+
+use std::sync::Arc;
+
+use crate::domain::error::DomainError;
+use crate::domain::product::{NewProduct, Product, ProductName};
+use crate::domain::repository::{ProductRepository, TagRepository};
+
+/// 更新商品的补丁：None 表示不修改该字段。
+/// `tag_ids` 传 Some(vec![]) 表示清空全部标签，Some(ids) 表示整体替换。
+#[derive(Debug, Default)]
+pub struct ProductPatch {
+    pub name: Option<String>,
+    pub tag_ids: Option<Vec<i64>>,
+    pub remark: Option<String>,
+}
+
+pub struct ProductService {
+    products: Arc<dyn ProductRepository>,
+    tags: Arc<dyn TagRepository>,
+}
+
+impl ProductService {
+    pub fn new(products: Arc<dyn ProductRepository>, tags: Arc<dyn TagRepository>) -> Self {
+        Self { products, tags }
+    }
+
+    pub async fn create_product(
+        &self,
+        name: String,
+        tag_ids: Vec<i64>,
+        remark: Option<String>,
+    ) -> Result<Product, DomainError> {
+        let name = ProductName::new(name)?;
+        self.ensure_name_available(name.as_str(), None).await?;
+        self.ensure_tags_exist(&tag_ids).await?;
+        let new_product = NewProduct {
+            name,
+            tag_ids,
+            remark: normalize_remark(remark),
+        };
+        self.products.create(&new_product).await
+    }
+
+    pub async fn get_product(&self, id: i64) -> Result<Product, DomainError> {
+        self.products
+            .find(id)
+            .await?
+            .ok_or_else(|| DomainError::NotFound(format!("商品 {id}")))
+    }
+
+    pub async fn list_products(&self) -> Result<Vec<Product>, DomainError> {
+        self.products.list().await
+    }
+
+    /// 使用某个标签的全部商品（删除标签前的影响提示）
+    pub async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError> {
+        self.products.list_by_tag(tag_id).await
+    }
+
+    pub async fn update_product(
+        &self,
+        id: i64,
+        patch: ProductPatch,
+    ) -> Result<Product, DomainError> {
+        let mut product = self.get_product(id).await?;
+
+        if patch.name.is_some() || patch.tag_ids.is_some() || patch.remark.is_some() {
+            let name = match patch.name {
+                Some(n) => ProductName::new(n)?,
+                None => product.name.clone(),
+            };
+            // 改名时校验新名字不与其他商品冲突
+            if name != product.name {
+                self.ensure_name_available(name.as_str(), Some(id)).await?;
+            }
+            let tag_ids = match patch.tag_ids {
+                Some(ids) => {
+                    self.ensure_tags_exist(&ids).await?;
+                    ids
+                }
+                None => product.tag_ids.clone(),
+            };
+            let remark = match patch.remark {
+                Some(r) => normalize_remark(Some(r)),
+                None => product.remark.clone(),
+            };
+            product.update_info(name, tag_ids, remark);
+        }
+
+        self.products.update(&product).await?;
+        Ok(product)
+    }
+
+    pub async fn delete_product(&self, id: i64) -> Result<(), DomainError> {
+        if !self.products.delete(id).await? {
+            return Err(DomainError::NotFound(format!("商品 {id}")));
+        }
+        Ok(())
+    }
+
+    /// 校验商品名未被占用；exclude_id 用于更新时排除自身
+    async fn ensure_name_available(
+        &self,
+        name: &str,
+        exclude_id: Option<i64>,
+    ) -> Result<(), DomainError> {
+        if let Some(existing) = self.products.find_by_name(name).await? {
+            if Some(existing.id) != exclude_id {
+                return Err(DomainError::Conflict(format!("商品名「{name}」已存在")));
+            }
+        }
+        Ok(())
+    }
+
+    /// 校验所有指定的标签都存在
+    async fn ensure_tags_exist(&self, tag_ids: &[i64]) -> Result<(), DomainError> {
+        for id in tag_ids {
+            if self.tags.find(*id).await?.is_none() {
+                return Err(DomainError::NotFound(format!("标签 {id}")));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 空白的备注视为没有备注
+fn normalize_remark(remark: Option<String>) -> Option<String> {
+    remark.and_then(|r| {
+        let r = r.trim().to_string();
+        if r.is_empty() { None } else { Some(r) }
+    })
+}

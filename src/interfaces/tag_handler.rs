@@ -2,7 +2,7 @@ use axum::extract::{Json, Path, State};
 
 use crate::application::tag_service::TagPatch;
 
-use super::dto::{ApiResponse, TagCreateRequest, TagResponse, TagUpdateRequest};
+use super::dto::{ApiResponse, ProductBriefResponse, TagCreateRequest, TagResponse, TagUpdateRequest};
 use super::AppState;
 
 /// GET /api/tags：标签列表
@@ -63,6 +63,29 @@ pub async fn delete_tag(
 ) -> Json<ApiResponse<()>> {
     match state.tag_service.delete_tag(id).await {
         Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/tags/{id}/products：使用该标签的商品（删除前的影响提示）
+pub async fn tag_products(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<Vec<ProductBriefResponse>>> {
+    // 先确认标签存在，避免对不存在的标签返回空列表造成误解
+    if let Err(e) = state.tag_service.get_tag(id).await {
+        return Json(ApiResponse::err(e.to_string()));
+    }
+    match state.product_service.list_by_tag(id).await {
+        Ok(products) => Json(ApiResponse::ok(
+            products
+                .into_iter()
+                .map(|p| ProductBriefResponse {
+                    id: p.id,
+                    name: p.name.as_str().to_string(),
+                })
+                .collect(),
+        )),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

@@ -37,6 +37,37 @@
         </section>
 
         <section class="card">
+            <h2>待爬取商品管理</h2>
+            <div class="form-row">
+                <input id="productName" type="text" placeholder="商品名，如：佳能 5D4 机身">
+                <input id="productRemark" type="text" placeholder="备注（可选）">
+                <button id="productSubmitBtn">添加商品</button>
+                <button id="productCancelBtn" class="btn-secondary" hidden>取消编辑</button>
+            </div>
+            <div id="productTagList" class="tag-checkboxes">
+                <span class="muted">暂无标签可勾选</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>商品名</th>
+                        <th>标签</th>
+                        <th>中位数</th>
+                        <th>均价</th>
+                        <th>爬取数量</th>
+                        <th>最后爬取</th>
+                        <th>回收价</th>
+                        <th>备注</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="productTable">
+                    <tr><td colspan="9" class="empty">暂无商品</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
             <h2>发起抓取</h2>
             <div class="form-row">
                 <input id="keyword" type="text" placeholder="搜索关键词，如：MacBook Pro">

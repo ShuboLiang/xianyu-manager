@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::crawl_task::{CrawlTask, TaskStatus};
 use crate::domain::item::Item;
+use crate::domain::product::Product;
 use crate::domain::tag::Tag;
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +108,67 @@ impl From<Tag> for TagResponse {
             updated_at: t.updated_at,
         }
     }
+}
+
+// ---------- 待爬取商品 ----------
+
+#[derive(Debug, Deserialize)]
+pub struct ProductCreateRequest {
+    pub name: String,
+    /// 不传或空数组 = 无标签
+    pub tag_ids: Option<Vec<i64>>,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProductUpdateRequest {
+    pub name: Option<String>,
+    /// 不传=不修改，空数组=清空全部标签，非空数组=整体替换
+    pub tag_ids: Option<Vec<i64>>,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductResponse {
+    pub id: i64,
+    pub name: String,
+    pub tag_ids: Vec<i64>,
+    /// 标签名列表，与 tag_ids 一一对应；无标签时为空数组
+    pub tag_names: Vec<String>,
+    pub remark: Option<String>,
+    pub median_price: Option<f64>,
+    pub avg_price: Option<f64>,
+    pub crawled_count: Option<u32>,
+    pub last_crawled_at: Option<u64>,
+    pub recycle_price: Option<f64>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+impl ProductResponse {
+    /// tag_names 由 handler 通过 TagService 解析后传入
+    pub fn from_product(p: Product, tag_names: Vec<String>) -> Self {
+        Self {
+            id: p.id,
+            name: p.name.as_str().to_string(),
+            tag_ids: p.tag_ids,
+            tag_names,
+            remark: p.remark,
+            median_price: p.median_price,
+            avg_price: p.avg_price,
+            crawled_count: p.crawled_count,
+            last_crawled_at: p.last_crawled_at,
+            recycle_price: p.recycle_price,
+            created_at: p.created_at,
+            updated_at: p.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductBriefResponse {
+    pub id: i64,
+    pub name: String,
 }
 
 /// 统一 API 响应结构

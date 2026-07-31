@@ -31,24 +31,27 @@ src/
 │   ├── dto.rs           #   HTTP 请求/响应结构，与 domain 模型解耦
 │   ├── crawl_handler.rs #   POST /api/crawl、GET /api/crawl/{id}
 │   ├── item_handler.rs  #   GET /api/items
-│   └── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
+│   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
+│   └── product_handler.rs#  GET/POST /api/products、GET/PUT/DELETE /api/products/{id}
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway（防腐层）
 │   ├── crawl_service.rs #   创建抓取任务 → 后台 tokio task 逐页抓取 → 落库
 │   ├── item_service.rs  #   商品列表查询
-│   └── tag_service.rs   #   标签 CRUD（重名冲突校验、部分字段更新）
+│   ├── tag_service.rs   #   标签 CRUD（重名冲突校验、部分字段更新）
+│   └── product_service.rs#  待爬取商品 CRUD（重名校验、标签存在校验）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
 │   ├── crawl_task.rs    #   CrawlTask 实体：状态流转规则只写在实体方法里
 │   ├── tag.rs           #   Tag 实体（TagName 值对象），enabled=false 的标签不参与抓取
-│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository
+│   ├── product.rs       #   Product 实体（待爬取商品）：名称/标签/备注 + 爬取统计字段
+│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository
 │   └── error.rs         #   DomainError，全项目统一错误语义
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
     ├── xianyu_gateway.rs#   XianYuGateway 实现：Mock / Http（真实接口待实现）
     └── persistence/
         ├── memory.rs    #   内存仓储：商品、抓取任务（重启即失）
-        └── sqlite.rs    #   SqliteTagRepository：标签持久化（建表 IF NOT EXISTS）
+        └── sqlite.rs    #   SQLite 仓储：标签、待爬取商品（共享连接池，启动自动建表）
 static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 axum 托管）
 ```
 
@@ -59,6 +62,8 @@ static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 a
 - **闲鱼网关是端口+实现（防腐层）**：`XianYuGateway` trait 定义在 `application/ports.rs`，实现（登录态、mtop 签名、解析）在 `infrastructure/xianyu_gateway.rs`。开发用 `GATEWAY=mock`。
 - **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。商品和任务目前是内存实现；标签已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
 - **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
+- **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）只由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
+- **删除语义**：数据库层一律 `CASCADE` 兜底（删标签/删商品只清关联，另一方不受影响）；交互层做影响提示——`GET /api/tags/{id}/products` 返回使用该标签的商品，前端删除标签前在确认框中列出受影响商品。不做「阻止删除」。
 
 ## 扩展约定
 
