@@ -26,7 +26,7 @@ cd web && npm run dev   # http://127.0.0.1:5173，/api 自动代理到 127.0.0.1
 | `HOST`          | `127.0.0.1`                 | 监听地址                                              |
 | `PORT`          | `3000`                      | 监听端口                                              |
 | `STATIC_DIR`    | `static`                    | 前端静态文件目录                                      |
-| `GATEWAY`       | `mock`                      | `mock`=假数据网关；`webbridge`=真实抓取（WebBridge 浏览器 + AI 筛选）；`http`=真实接口（未实现） |
+| `GATEWAY`       | `webbridge`                 | `webbridge`=真实抓取（WebBridge 浏览器 + AI 筛选，默认）；`mock`=假数据网关；`http`=真实接口（未实现） |
 | `WEBBRIDGE_URL` | `http://127.0.0.1:10086`    | `GATEWAY=webbridge` 时的 Kimi WebBridge daemon 地址   |
 | `RECYCLE_FACTOR`| `0.9`                       | 回收价系数：回收价 = 中位数 × 系数（0,1]              |
 | `XIANYU_COOKIE` | -                           | `GATEWAY=http` 时的闲鱼登录态 Cookie                  |

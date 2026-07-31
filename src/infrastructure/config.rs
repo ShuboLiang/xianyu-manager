@@ -36,7 +36,7 @@ impl Config {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".into()),
-            gateway: std::env::var("GATEWAY").unwrap_or_else(|_| "mock".into()),
+            gateway: std::env::var("GATEWAY").unwrap_or_else(|_| "webbridge".into()),
             webbridge_url: std::env::var("WEBBRIDGE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:10086".into()),
             recycle_factor: std::env::var("RECYCLE_FACTOR")
