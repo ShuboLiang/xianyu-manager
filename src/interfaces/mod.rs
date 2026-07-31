@@ -1,5 +1,6 @@
 //! 接口层：axum 路由与 handler，只做 HTTP 协议 ↔ 应用层的翻译。
 
+pub mod ai_handler;
 pub mod crawl_handler;
 pub mod dto;
 pub mod item_handler;
@@ -15,6 +16,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
+use crate::application::ai_provider_service::AiProviderService;
+use crate::application::ai_tool_call_service::AiToolCallService;
 use crate::application::crawl_service::CrawlService;
 use crate::application::item_service::ItemService;
 use crate::application::product_service::ProductService;
@@ -31,6 +34,8 @@ pub struct AppState {
     pub tag_service: Arc<TagService>,
     pub product_service: Arc<ProductService>,
     pub queue_service: Arc<QueueService>,
+    pub ai_provider_service: Arc<AiProviderService>,
+    pub ai_tool_call_service: Arc<AiToolCallService>,
 }
 
 /// 组装整个应用的路由：
@@ -72,6 +77,21 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route("/queues/{id}/pause", post(queue_handler::pause_queue))
         .route("/queues/{id}/resume", post(queue_handler::resume_queue))
         .route("/queues/{id}/cancel", post(queue_handler::cancel_queue))
+        // AI 配置
+        .route("/ai/status", get(ai_handler::ai_status))
+        .route("/ai/tool-calls", get(ai_handler::list_tool_calls))
+        .route(
+            "/ai/providers",
+            get(ai_handler::list_providers).post(ai_handler::create_provider),
+        )
+        .route(
+            "/ai/providers/{id}",
+            get(ai_handler::get_provider)
+                .put(ai_handler::update_provider)
+                .delete(ai_handler::delete_provider),
+        )
+        .route("/ai/providers/{id}/default", post(ai_handler::set_default_provider))
+        .route("/ai/providers/{id}/test", post(ai_handler::test_provider))
         .with_state(state);
 
     Router::new()

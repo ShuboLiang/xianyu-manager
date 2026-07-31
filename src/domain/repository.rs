@@ -2,6 +2,8 @@
 
 use async_trait::async_trait;
 
+use super::ai_provider::{AiProvider, NewAiProvider};
+use super::ai_tool_call::{AiToolCall, NewAiToolCall};
 use super::crawl_queue::{CrawlEntry, CrawlQueue, QueueStatus};
 use super::crawl_task::CrawlTask;
 use super::error::DomainError;
@@ -69,4 +71,28 @@ pub trait QueueRepository: Send + Sync {
     async fn reset_running_entries(&self) -> Result<(), DomainError>;
     /// 删除队列及其全部条目，返回是否真的删除了记录
     async fn delete_queue(&self, id: i64) -> Result<bool, DomainError>;
+}
+
+#[async_trait]
+pub trait AiProviderRepository: Send + Sync {
+    /// 创建配置并返回带 id 的完整实体
+    async fn create(&self, provider: &NewAiProvider) -> Result<AiProvider, DomainError>;
+    async fn find(&self, id: i64) -> Result<Option<AiProvider>, DomainError>;
+    async fn find_by_name(&self, name: &str) -> Result<Option<AiProvider>, DomainError>;
+    async fn list(&self) -> Result<Vec<AiProvider>, DomainError>;
+    async fn update(&self, provider: &AiProvider) -> Result<(), DomainError>;
+    /// 返回是否真的删除了记录
+    async fn delete(&self, id: i64) -> Result<bool, DomainError>;
+    /// 当前默认配置（is_default = 1），最多一条
+    async fn find_default(&self) -> Result<Option<AiProvider>, DomainError>;
+    /// 清掉全部默认标记（set_default 前先清后设）
+    async fn clear_default(&self) -> Result<(), DomainError>;
+}
+
+#[async_trait]
+pub trait AiToolCallRepository: Send + Sync {
+    /// 落一条工具调用审计记录并返回带 id 的完整实体
+    async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError>;
+    /// 最近的调用记录，按时间倒序
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AiToolCall>, DomainError>;
 }

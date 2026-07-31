@@ -19,6 +19,9 @@ cargo run        # 默认 http://127.0.0.1:3000
 | `GATEWAY` | `mock` | `mock`=假数据网关，`http`=真实闲鱼接口（未实现） |
 | `XIANYU_COOKIE` | - | `GATEWAY=http` 时的闲鱼登录态 Cookie |
 | `DATABASE_PATH` | `data/xianyu.db` | SQLite 数据库文件路径（目录自动创建） |
+| `AI_API_KEY` | - | AI 环境变量兜底密钥（未配置 DB 默认 provider 时生效） |
+| `AI_BASE_URL` | `https://api.openai.com/v1` | AI 环境变量兜底端点（OpenAI 兼容） |
+| `AI_MODEL` | `gpt-4o-mini` | AI 环境变量兜底模型名 |
 
 ## 架构（DDD-Lite，四层）
 
@@ -33,28 +36,34 @@ src/
 │   ├── item_handler.rs  #   GET /api/items
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
 │   ├── product_handler.rs#  GET/POST /api/products、GET/PUT/DELETE /api/products/{id}
-│   └── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
+│   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
+│   └── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计
 ├── application/         # 应用层：用例编排，不含业务规则
-│   ├── ports.rs         #   端口 trait：XianYuGateway（防腐层）
+│   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
 │   ├── crawl_service.rs #   创建抓取任务 → 后台 tokio task 逐页抓取 → 落库
 │   ├── item_service.rs  #   商品列表查询
 │   ├── tag_service.rs   #   标签 CRUD（重名冲突校验、部分字段更新）
 │   ├── product_service.rs#  待爬取商品 CRUD（重名校验、标签存在校验）
-│   └── queue_service.rs #   抓取队列：选择器解析、入队去重、全局唯一 worker 串行消费
+│   ├── queue_service.rs #   抓取队列：选择器解析、入队去重、全局唯一 worker 串行消费
+│   ├── ai_provider_service.rs # AI 供应商配置管理 + 连通性测试
+│   └── ai_tool_call_service.rs # AI 工具调用审计查询
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
 │   ├── crawl_task.rs    #   CrawlTask 实体：状态流转规则只写在实体方法里
 │   ├── tag.rs           #   Tag 实体（TagName 值对象），enabled=false 的标签不参与抓取
 │   ├── product.rs       #   Product 实体（待爬取商品）：名称/标签/备注 + 爬取统计字段
 │   ├── crawl_queue.rs   #   CrawlQueue/CrawlEntry 实体、Selector 值对象、状态机
-│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository
+│   ├── ai_provider.rs   #   AiProvider 实体（OpenAI 兼容端点配置）
+│   ├── ai_tool_call.rs  #   AiToolCall 审计实体
+│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiToolCallRepository
 │   └── error.rs         #   DomainError，全项目统一错误语义
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
     ├── xianyu_gateway.rs#   XianYuGateway 实现：Mock / Http（真实接口待实现）
+    ├── ai_gateway.rs    #   AiGateway 实现：基于 rig-core 的 OpenAI 兼容端点 + 手写 ReAct 工具循环
     └── persistence/
         ├── memory.rs    #   内存仓储：商品、抓取任务（重启即失）
-        └── sqlite.rs    #   SQLite 仓储：标签、待爬取商品、抓取队列+条目（共享连接池，启动自动建表）
+        └── sqlite.rs    #   SQLite 仓储：标签、待爬取商品、抓取队列+条目、AI 配置与审计（共享连接池，启动自动建表）
 static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 axum 托管）
 ```
 
@@ -75,6 +84,11 @@ static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 a
   - 队列状态机：`waiting → running → paused/done/cancelled`，`paused → waiting`（恢复=重新排队，无差别恢复）；暂停是**优雅暂停**——当前条目跑完才停。全部暂停/全部恢复只是批量状态变更，运行中队列可用 `POST /api/queues/{id}/entries` 追加条目。
   - 历史清理：`DELETE /api/queues/{id}` 只允许删除 done/cancelled 的队列（条目一并删除），活跃队列拒绝并提示先取消。前端默认只展示活跃队列，done/cancelled 收进「历史队列」折叠区，可在展开后单个删除。
   - 每条抓取成功后调用 `Product::record_crawl_result` 回填统计（中位数/均价/数量/最后爬取时间/回收价格）。真实爬虫未实现，`GATEWAY=mock` 下回收价用均价占位。
+- **AI 基础设施**（详细方案见 `docs/design-ai-module.md`）：
+  - `AiGateway`/`AiTool` 端口在 `application/ports.rs`；真实实现 `RigAiGateway` 在 `infrastructure/ai_gateway.rs`，基于 `rig-core` 0.41 的 OpenAI 兼容端点（DeepSeek/千问/Kimi 等通用），手写 ReAct 工具循环。
+  - AI 供应商配置入库管理（`ai_providers`）：前端「AI 接口管理」卡片可增删改查、设默认、测试连通性；密钥明文存本地 SQLite，响应掩码显示。优先级：**DB 默认配置 > `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 环境变量兜底**。
+  - AI 工具可直接产生读写结果（完全自动，无人工确认）；每次工具执行落 `ai_tool_calls` 审计表（工具名/参数/结果或错误/耗时），前端「AI 工具调用记录」可回查。
+  - 当前未实现具体 AI 用例（智能建标签、商品分类等），基础设施已就绪，后续用例来了只需在 `application/ai/` 加 service 并注册工具。
 
 ## 扩展约定
 

@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::application::ai_provider_service::{AiStatus, TestConnectionResult};
 use crate::application::queue_service::QueueProgress;
+use crate::domain::ai_provider::AiProvider;
+use crate::domain::ai_tool_call::AiToolCall;
 use crate::domain::crawl_queue::Selector;
 use crate::domain::crawl_task::{CrawlTask, TaskStatus};
 use crate::domain::item::Item;
@@ -258,6 +261,130 @@ pub struct EnqueueResponse {
     pub status: String,
     pub added: Vec<ProductBriefResponse>,
     pub skipped: Vec<ProductBriefResponse>,
+}
+
+// ---------- AI 配置 ----------
+
+#[derive(Debug, Deserialize)]
+pub struct AiProviderCreateRequest {
+    pub name: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u32,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct AiProviderUpdateRequest {
+    pub name: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub timeout_secs: Option<u32>,
+    pub max_retries: Option<u32>,
+}
+
+fn default_timeout_secs() -> u32 {
+    60
+}
+
+fn default_max_retries() -> u32 {
+    2
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiProviderResponse {
+    pub id: i64,
+    pub name: String,
+    pub base_url: String,
+    /// 掩码后的密钥，未设置时为 null
+    pub api_key: Option<String>,
+    pub model: String,
+    pub timeout_secs: u32,
+    pub max_retries: u32,
+    pub is_default: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+impl From<AiProvider> for AiProviderResponse {
+    fn from(p: AiProvider) -> Self {
+        let api_key = p.masked_key();
+        Self {
+            id: p.id,
+            name: p.name,
+            base_url: p.base_url,
+            api_key,
+            model: p.model,
+            timeout_secs: p.timeout_secs,
+            max_retries: p.max_retries,
+            is_default: p.is_default,
+            created_at: p.created_at,
+            updated_at: p.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestConnectionResponse {
+    pub latency_ms: u64,
+    pub reply: String,
+}
+
+impl From<TestConnectionResult> for TestConnectionResponse {
+    fn from(r: TestConnectionResult) -> Self {
+        Self {
+            latency_ms: r.latency_ms,
+            reply: r.reply,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiStatusResponse {
+    pub configured: bool,
+    pub source: Option<String>,
+    pub name: Option<String>,
+    pub model: Option<String>,
+}
+
+impl From<AiStatus> for AiStatusResponse {
+    fn from(s: AiStatus) -> Self {
+        Self {
+            configured: s.configured,
+            source: s.source,
+            name: s.name,
+            model: s.model,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiToolCallResponse {
+    pub id: i64,
+    pub tool_name: String,
+    pub arguments: String,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    pub duration_ms: u64,
+    pub created_at: u64,
+}
+
+impl From<AiToolCall> for AiToolCallResponse {
+    fn from(c: AiToolCall) -> Self {
+        Self {
+            id: c.id,
+            tool_name: c.tool_name,
+            arguments: c.arguments,
+            result: c.result,
+            error: c.error,
+            duration_ms: c.duration_ms,
+            created_at: c.created_at,
+        }
+    }
 }
 
 /// 统一 API 响应结构

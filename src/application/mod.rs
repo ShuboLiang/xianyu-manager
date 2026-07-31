@@ -1,3 +1,5 @@
+pub mod ai_provider_service;
+pub mod ai_tool_call_service;
 pub mod crawl_service;
 pub mod item_service;
 pub mod ports;

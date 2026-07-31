@@ -1,3 +1,5 @@
+pub mod ai_provider;
+pub mod ai_tool_call;
 pub mod crawl_queue;
 pub mod crawl_task;
 pub mod error;

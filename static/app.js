@@ -566,13 +566,237 @@ async function resumeAll() {
     loadQueues();
 }
 
+// ---------- AI 接口管理 ----------
+
+const aiProviderTableEl = document.getElementById('aiProviderTable');
+let editingAiProviderId = null;
+
+// 供应商模板：key 仅用于前端选择，后端统一使用 OpenAI 兼容协议（openai::Client + base_url）。
+// base_url / model 参考 rig-core 0.41 各 provider 常量与官方 OpenAI 兼容端点文档（2026-07）。
+const AI_PRESETS = {
+    // 国际主流
+    openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
+    xai: { name: 'xAI (Grok)', base_url: 'https://api.x.ai/v1', model: 'grok-4.3' },
+    groq: { name: 'Groq', base_url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+    mistral: { name: 'Mistral AI', base_url: 'https://api.mistral.ai/v1', model: 'mistral-large-3' },
+    together: { name: 'Together AI', base_url: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct' },
+    openrouter: { name: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4.1-mini' },
+    hyperbolic: { name: 'Hyperbolic', base_url: 'https://api.hyperbolic.xyz/v1', model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct' },
+    perplexity: { name: 'Perplexity', base_url: 'https://api.perplexity.ai', model: 'sonar' },
+    gemini: { name: 'Gemini (OpenAI 兼容)', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
+    // 国内主流
+    deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' },
+    moonshot: { name: 'Kimi (Moonshot 国内)', base_url: 'https://api.moonshot.cn/v1', model: 'kimi-k3' },
+    moonshot_global: { name: 'Kimi (Moonshot 国际)', base_url: 'https://api.moonshot.ai/v1', model: 'kimi-k3' },
+    qwen: { name: '通义千问', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3.5-plus' },
+    zhipu: { name: '智谱 AI', base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.5' },
+    siliconflow: { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V4-Flash' },
+    minimax: { name: 'MiniMax', base_url: 'https://api.minimaxi.com/v1', model: 'MiniMax-M3' },
+    // 本地
+    ollama: { name: 'Ollama (本地)', base_url: 'http://localhost:11434/v1', model: 'llama4:scout' },
+    // 自定义
+    custom: { name: '自定义 OpenAI 兼容', base_url: '', model: '' },
+};
+
+function applyAiPreset(key) {
+    const preset = AI_PRESETS[key];
+    if (!preset) return;
+    if (preset.name) {
+        document.getElementById('aiName').value = preset.name;
+    }
+    document.getElementById('aiBaseUrl').value = preset.base_url;
+    document.getElementById('aiModel').value = preset.model;
+}
+
+function initAiPresetDropdown() {
+    const select = document.getElementById('aiPreset');
+    if (!select) return;
+    // 保留第一个占位选项，其余由 AI_PRESETS 动态生成
+    const placeholder = select.options[0];
+    select.innerHTML = '';
+    select.appendChild(placeholder);
+    Object.entries(AI_PRESETS).forEach(([key, preset]) => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = preset.name || key;
+        select.appendChild(opt);
+    });
+    // 避免浏览器恢复表单状态时 select 有值而 base_url/model 仍是 HTML 默认值
+    const savedValue = select.value;
+    select.value = '';
+    select.addEventListener('change', () => applyAiPreset(select.value));
+    if (savedValue && AI_PRESETS[savedValue]) {
+        select.value = savedValue;
+        applyAiPreset(savedValue);
+    }
+}
+
+async function loadAiStatus() {
+    const res = await fetch('/api/ai/status');
+    const body = await res.json();
+    const banner = document.getElementById('aiStatusBanner');
+    const text = document.getElementById('aiStatusText');
+    if (!body.data.configured) {
+        banner.hidden = false;
+        text.textContent = '尚未配置 AI 接口（请在下方添加或设置 AI_API_KEY 环境变量）';
+    } else {
+        banner.hidden = true;
+    }
+}
+
+async function loadAiProviders() {
+    const res = await fetch('/api/ai/providers');
+    const body = await res.json();
+    const providers = body.data || [];
+    if (providers.length === 0) {
+        aiProviderTableEl.innerHTML = '<tr><td colspan="6" class="empty">暂无 AI 配置</td></tr>';
+    } else {
+        aiProviderTableEl.innerHTML = providers.map(p => `
+            <tr>
+                <td>${p.name}</td>
+                <td>${p.base_url}</td>
+                <td>${p.model}</td>
+                <td>${p.api_key || '-'}</td>
+                <td>${p.is_default ? '<span class="badge badge-running">默认</span>' : '-'}</td>
+                <td>
+                    <a href="#" onclick="editAiProvider(${p.id}); return false;">编辑</a>
+                    <a href="#" onclick="testAiProvider(${p.id}); return false;">测试</a>
+                    ${p.is_default ? '' : `<a href="#" onclick="setDefaultAiProvider(${p.id}); return false;">设为默认</a>`}
+                    <a href="#" onclick="deleteAiProvider(${p.id}); return false;">删除</a>
+                </td>
+            </tr>
+        `).join('');
+    }
+    loadAiStatus();
+}
+
+async function submitAiProvider() {
+    const name = document.getElementById('aiName').value.trim();
+    const base_url = document.getElementById('aiBaseUrl').value.trim();
+    const api_key = document.getElementById('aiApiKey').value.trim();
+    const model = document.getElementById('aiModel').value.trim();
+    const timeout_secs = Number(document.getElementById('aiTimeout').value) || 60;
+    if (!name || !base_url || !model) {
+        alert('名称、base_url、模型名必填');
+        return;
+    }
+    const payload = { name, base_url, api_key: api_key || null, model, timeout_secs };
+    const isEdit = editingAiProviderId !== null;
+    const url = isEdit ? `/api/ai/providers/${editingAiProviderId}` : '/api/ai/providers';
+    const res = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert((isEdit ? '更新' : '添加') + '失败: ' + body.message);
+        return;
+    }
+    resetAiProviderForm();
+    loadAiProviders();
+}
+
+function editAiProvider(id) {
+    const p = aiProviderTableEl.querySelectorAll('tr')[id]; // 不严谨，直接重新请求
+    fetch(`/api/ai/providers/${id}`).then(r => r.json()).then(body => {
+        if (body.code !== 0) return;
+        const p = body.data;
+        editingAiProviderId = p.id;
+        document.getElementById('aiName').value = p.name;
+        document.getElementById('aiBaseUrl').value = p.base_url;
+        document.getElementById('aiApiKey').value = '';
+        document.getElementById('aiModel').value = p.model;
+        document.getElementById('aiTimeout').value = p.timeout_secs;
+        document.getElementById('aiSubmitBtn').textContent = '保存修改';
+        document.getElementById('aiCancelBtn').hidden = false;
+    });
+}
+
+function resetAiProviderForm() {
+    editingAiProviderId = null;
+    document.getElementById('aiName').value = '';
+    document.getElementById('aiBaseUrl').value = 'https://api.openai.com/v1';
+    document.getElementById('aiApiKey').value = '';
+    document.getElementById('aiModel').value = 'gpt-4o-mini';
+    document.getElementById('aiTimeout').value = 60;
+    document.getElementById('aiSubmitBtn').textContent = '添加配置';
+    document.getElementById('aiCancelBtn').hidden = true;
+}
+
+async function testAiProvider(id) {
+    const res = await fetch(`/api/ai/providers/${id}/test`, { method: 'POST' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('测试失败: ' + body.message);
+        return;
+    }
+    alert(`连通正常，耗时 ${body.data.latency_ms} ms\n模型回复：${body.data.reply}`);
+}
+
+async function setDefaultAiProvider(id) {
+    const res = await fetch(`/api/ai/providers/${id}/default`, { method: 'POST' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('设置默认失败: ' + body.message);
+        return;
+    }
+    loadAiProviders();
+}
+
+async function deleteAiProvider(id) {
+    if (!confirm('确定删除该 AI 配置？')) return;
+    const res = await fetch(`/api/ai/providers/${id}`, { method: 'DELETE' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('删除失败: ' + body.message);
+        return;
+    }
+    resetAiProviderForm();
+    loadAiProviders();
+}
+
+async function loadAiCalls() {
+    const res = await fetch('/api/ai/tool-calls?limit=20');
+    const body = await res.json();
+    const calls = body.data || [];
+    const toggle = document.getElementById('aiCallsToggle');
+    document.getElementById('aiCallsCount').textContent = calls.length;
+    toggle.hidden = calls.length === 0;
+    const wrap = document.getElementById('aiCallsTableWrap');
+    if (calls.length === 0) {
+        wrap.hidden = true;
+        document.getElementById('aiCallsArrow').textContent = '▸';
+    }
+    document.getElementById('aiCallsTable').innerHTML = calls.map(c => `
+        <tr>
+            <td>${fmtTime(c.created_at)}</td>
+            <td>${c.tool_name}</td>
+            <td title="${c.arguments}">${c.arguments.slice(0, 60)}${c.arguments.length > 60 ? '...' : ''}</td>
+            <td title="${c.result || c.error || ''}">${c.result ? '成功' : (c.error ? '失败: ' + c.error.slice(0, 40) : '-')}</td>
+            <td>${c.duration_ms} ms</td>
+        </tr>
+    `).join('');
+}
+
+function toggleAiCalls() {
+    const wrap = document.getElementById('aiCallsTableWrap');
+    wrap.hidden = !wrap.hidden;
+    document.getElementById('aiCallsArrow').textContent = wrap.hidden ? '▸' : '▾';
+}
+
 document.getElementById('previewBtn').addEventListener('click', previewSelector);
 document.getElementById('enqueueBtn').addEventListener('click', enqueueBySelector);
 document.getElementById('crawlSelectedBtn').addEventListener('click', crawlSelected);
 document.getElementById('pauseAllBtn').addEventListener('click', pauseAll);
 document.getElementById('resumeAllBtn').addEventListener('click', resumeAll);
+document.getElementById('aiSubmitBtn').addEventListener('click', submitAiProvider);
+document.getElementById('aiCancelBtn').addEventListener('click', resetAiProviderForm);
 
+initAiPresetDropdown();
 checkHealth();
 loadTags().then(loadProducts);
 loadItems();
 loadQueues();
+loadAiProviders();
+loadAiCalls();

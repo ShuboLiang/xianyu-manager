@@ -6,6 +6,16 @@ use crate::domain::error::DomainError;
 use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{ProductRepository, TagRepository};
 
+/// 单次批量导入的数量上限
+const BATCH_CREATE_LIMIT: usize = 200;
+
+/// 批量创建结果：创建成功的商品 + 被跳过的条目（名称, 原因）
+#[derive(Debug)]
+pub struct BatchCreateResult {
+    pub created: Vec<Product>,
+    pub skipped: Vec<(String, String)>,
+}
+
 /// 更新商品的补丁：None 表示不修改该字段。
 /// `tag_ids` 传 Some(vec![]) 表示清空全部标签，Some(ids) 表示整体替换。
 #[derive(Debug, Default)]

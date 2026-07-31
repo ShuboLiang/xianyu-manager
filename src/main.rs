@@ -7,6 +7,8 @@ mod interfaces;
 
 use std::sync::Arc;
 
+use application::ai_provider_service::AiProviderService;
+use application::ai_tool_call_service::AiToolCallService;
 use application::crawl_service::CrawlService;
 use application::item_service::ItemService;
 use application::ports::XianYuGateway;
@@ -16,7 +18,8 @@ use application::tag_service::TagService;
 use infrastructure::config::Config;
 use infrastructure::persistence::memory::{InMemoryCrawlTaskRepository, InMemoryItemRepository};
 use infrastructure::persistence::sqlite::{
-    self, SqliteProductRepository, SqliteQueueRepository, SqliteTagRepository,
+    self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteProductRepository,
+    SqliteQueueRepository, SqliteTagRepository,
 };
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
 use interfaces::AppState;
@@ -39,7 +42,9 @@ async fn main() -> anyhow::Result<()> {
     let pool = sqlite::connect(&config.database_path).await?;
     let tag_repo = Arc::new(SqliteTagRepository::new(pool.clone()));
     let product_repo = Arc::new(SqliteProductRepository::new(pool.clone()));
-    let queue_repo = Arc::new(SqliteQueueRepository::new(pool));
+    let queue_repo = Arc::new(SqliteQueueRepository::new(pool.clone()));
+    let ai_provider_repo = Arc::new(SqliteAiProviderRepository::new(pool.clone()));
+    let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool));
     let gateway: Arc<dyn XianYuGateway> = match config.gateway.as_str() {
         "http" => Arc::new(HttpXianYuGateway::new(std::env::var("XIANYU_COOKIE").ok())),
         _ => Arc::new(MockXianYuGateway),
@@ -57,6 +62,28 @@ async fn main() -> anyhow::Result<()> {
         gateway,
         item_repo,
     ));
+    let ai_gateway: Arc<dyn crate::application::ports::AiGateway> = Arc::new(
+        crate::infrastructure::ai_gateway::RigAiGateway::new(
+            ai_provider_repo.clone(),
+            ai_tool_call_repo.clone(),
+            crate::application::ports::AiEnvFallback {
+                api_key: config.ai_fallback.api_key.clone(),
+                base_url: config.ai_fallback.base_url.clone(),
+                model: config.ai_fallback.model.clone(),
+            },
+        ),
+    );
+    let ai_env_fallback = crate::application::ports::AiEnvFallback {
+        api_key: config.ai_fallback.api_key.clone(),
+        base_url: config.ai_fallback.base_url.clone(),
+        model: config.ai_fallback.model.clone(),
+    };
+    let ai_provider_service = Arc::new(AiProviderService::new(
+        ai_provider_repo,
+        ai_gateway,
+        ai_env_fallback,
+    ));
+    let ai_tool_call_service = Arc::new(AiToolCallService::new(ai_tool_call_repo));
 
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
@@ -69,6 +96,8 @@ async fn main() -> anyhow::Result<()> {
             tag_service,
             product_service,
             queue_service,
+            ai_provider_service,
+            ai_tool_call_service,
         },
         &config.static_dir,
     );

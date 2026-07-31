@@ -53,7 +53,18 @@ input {
     font-size: 14px;
 }
 input[type="text"] { flex: 1; }
-input[type="number"] { width: 90px; }
+input[type="number"] { width: 90px; flex: none; }
+
+select { flex: 1; }
+
+.ai-form-row { align-items: stretch; }
+.ai-form-row input,
+.ai-form-row select { min-width: 0; }
+.ai-form-hint {
+    font-size: 12px;
+    color: #888;
+    margin: -4px 0 8px;
+}
 
 button {
     padding: 8px 18px;

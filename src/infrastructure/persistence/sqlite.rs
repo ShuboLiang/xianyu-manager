@@ -1,20 +1,39 @@
-//! SQLite 仓储实现：标签与待爬取商品的持久化。
+//! SQLite 仓储实现：标签、待爬取商品、抓取队列、AI 配置的持久化。
 //! 连接时自动创建数据目录与表结构（IF NOT EXISTS），无需外部迁移工具。
 //! 各仓储共享同一个连接池，由 `connect` 在启动时创建。
 
 use async_trait::async_trait;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqliteRow};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
 
+use crate::domain::ai_provider::{AiProvider, NewAiProvider};
+use crate::domain::ai_tool_call::{AiToolCall, NewAiToolCall};
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus};
 use crate::domain::error::DomainError;
 use crate::domain::product::{NewProduct, Product, ProductName};
-use crate::domain::repository::{ProductRepository, QueueRepository, TagRepository};
+use crate::domain::repository::{
+    AiProviderRepository, AiToolCallRepository, ProductRepository, QueueRepository, TagRepository,
+};
 use crate::domain::tag::{NewTag, Tag, TagName};
 
 /// 打开（必要时创建）数据库，初始化全部表结构，返回共享连接池。
 /// 开启外键约束：删除商品或标签时自动清理 product_tags 关联（ON DELETE CASCADE）。
+/// 传 ":memory:" 使用内存库（测试用）：整个池限制为一条连接，
+/// 否则每条连接会各开一个独立的空库。
 pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
+    if path == ":memory:" {
+        let options = SqliteConnectOptions::new()
+            .in_memory(true)
+            .pragma("foreign_keys", "ON");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(to_infra)?;
+        create_tables(&pool).await?;
+        return Ok(pool);
+    }
+
     if let Some(parent) = std::path::Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
@@ -29,6 +48,12 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
         .await
         .map_err(to_infra)?;
 
+    create_tables(&pool).await?;
+    Ok(pool)
+}
+
+/// 初始化全部表结构（IF NOT EXISTS，可重复执行）
+async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS tags (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +64,7 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
             updated_at INTEGER NOT NULL
         )",
     )
-    .execute(&pool)
+    .execute(&*pool)
     .await
     .map_err(to_infra)?;
 
@@ -57,7 +82,7 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
             updated_at      INTEGER NOT NULL
         )",
     )
-    .execute(&pool)
+    .execute(&*pool)
     .await
     .map_err(to_infra)?;
 
@@ -69,7 +94,7 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
             PRIMARY KEY (product_id, tag_id)
         )",
     )
-    .execute(&pool)
+    .execute(&*pool)
     .await
     .map_err(to_infra)?;
 
@@ -83,7 +108,7 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
             finished_at   INTEGER
         )",
     )
-    .execute(&pool)
+    .execute(&*pool)
     .await
     .map_err(to_infra)?;
 
@@ -97,11 +122,46 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
             crawled_at INTEGER
         )",
     )
-    .execute(&pool)
+    .execute(&*pool)
     .await
     .map_err(to_infra)?;
 
-    Ok(pool)
+    // AI 供应商配置（密钥明文存本地库，见 domain/ai_provider.rs 说明）
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_providers (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL UNIQUE,
+            base_url     TEXT NOT NULL,
+            api_key      TEXT,
+            model        TEXT NOT NULL,
+            timeout_secs INTEGER NOT NULL DEFAULT 60,
+            max_retries  INTEGER NOT NULL DEFAULT 2,
+            is_default   INTEGER NOT NULL DEFAULT 0,
+            created_at   INTEGER NOT NULL,
+            updated_at   INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    // AI 工具调用审计（只增不改）
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_tool_calls (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_name   TEXT NOT NULL,
+            arguments   TEXT NOT NULL,
+            result      TEXT,
+            error       TEXT,
+            duration_ms INTEGER NOT NULL,
+            created_at  INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    Ok(())
 }
 
 // ---------- 标签 ----------
@@ -581,5 +641,206 @@ fn row_to_entry(row: &SqliteRow) -> Result<CrawlEntry, DomainError> {
         status: EntryStatus::from_str(row.get::<String, _>("status").as_str())?,
         error: row.get("error"),
         crawled_at: row.get::<Option<i64>, _>("crawled_at").map(|t| t as u64),
+    })
+}
+
+// ---------- AI 配置 ----------
+
+pub struct SqliteAiProviderRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteAiProviderRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl AiProviderRepository for SqliteAiProviderRepository {
+    async fn create(&self, provider: &NewAiProvider) -> Result<AiProvider, DomainError> {
+        let now = crate::domain::crawl_task::now_unix();
+        let result = sqlx::query(
+            "INSERT INTO ai_providers
+             (name, base_url, api_key, model, timeout_secs, max_retries, is_default, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+        )
+        .bind(&provider.name)
+        .bind(&provider.base_url)
+        .bind(&provider.api_key)
+        .bind(&provider.model)
+        .bind(provider.timeout_secs as i64)
+        .bind(provider.max_retries as i64)
+        .bind(now as i64)
+        .bind(now as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(to_infra)?;
+
+        Ok(AiProvider {
+            id: result.last_insert_rowid(),
+            name: provider.name.clone(),
+            base_url: provider.base_url.clone(),
+            api_key: provider.api_key.clone(),
+            model: provider.model.clone(),
+            timeout_secs: provider.timeout_secs,
+            max_retries: provider.max_retries,
+            is_default: false,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn find(&self, id: i64) -> Result<Option<AiProvider>, DomainError> {
+        let row = sqlx::query("SELECT * FROM ai_providers WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        row.as_ref().map(row_to_ai_provider).transpose()
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<AiProvider>, DomainError> {
+        let row = sqlx::query("SELECT * FROM ai_providers WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        row.as_ref().map(row_to_ai_provider).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<AiProvider>, DomainError> {
+        let rows = sqlx::query("SELECT * FROM ai_providers ORDER BY created_at ASC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        rows.iter().map(row_to_ai_provider).collect()
+    }
+
+    async fn update(&self, provider: &AiProvider) -> Result<(), DomainError> {
+        sqlx::query(
+            "UPDATE ai_providers SET
+             name = ?, base_url = ?, api_key = ?, model = ?,
+             timeout_secs = ?, max_retries = ?, is_default = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&provider.name)
+        .bind(&provider.base_url)
+        .bind(&provider.api_key)
+        .bind(&provider.model)
+        .bind(provider.timeout_secs as i64)
+        .bind(provider.max_retries as i64)
+        .bind(provider.is_default)
+        .bind(provider.updated_at as i64)
+        .bind(provider.id)
+        .execute(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: i64) -> Result<bool, DomainError> {
+        let result = sqlx::query("DELETE FROM ai_providers WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn find_default(&self) -> Result<Option<AiProvider>, DomainError> {
+        let row = sqlx::query("SELECT * FROM ai_providers WHERE is_default = 1 LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        row.as_ref().map(row_to_ai_provider).transpose()
+    }
+
+    async fn clear_default(&self) -> Result<(), DomainError> {
+        sqlx::query("UPDATE ai_providers SET is_default = 0")
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(())
+    }
+}
+
+fn row_to_ai_provider(row: &SqliteRow) -> Result<AiProvider, DomainError> {
+    Ok(AiProvider {
+        id: row.get("id"),
+        name: row.get("name"),
+        base_url: row.get("base_url"),
+        api_key: row.get("api_key"),
+        model: row.get("model"),
+        timeout_secs: row.get::<i64, _>("timeout_secs") as u32,
+        max_retries: row.get::<i64, _>("max_retries") as u32,
+        is_default: row.get("is_default"),
+        created_at: row.get::<i64, _>("created_at") as u64,
+        updated_at: row.get::<i64, _>("updated_at") as u64,
+    })
+}
+
+// ---------- AI 工具调用审计 ----------
+
+pub struct SqliteAiToolCallRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteAiToolCallRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl AiToolCallRepository for SqliteAiToolCallRepository {
+    async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError> {
+        let now = crate::domain::crawl_task::now_unix();
+        let result = sqlx::query(
+            "INSERT INTO ai_tool_calls (tool_name, arguments, result, error, duration_ms, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&call.tool_name)
+        .bind(&call.arguments)
+        .bind(&call.result)
+        .bind(&call.error)
+        .bind(call.duration_ms as i64)
+        .bind(now as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(to_infra)?;
+
+        Ok(AiToolCall {
+            id: result.last_insert_rowid(),
+            tool_name: call.tool_name.clone(),
+            arguments: call.arguments.clone(),
+            result: call.result.clone(),
+            error: call.error.clone(),
+            duration_ms: call.duration_ms,
+            created_at: now,
+        })
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AiToolCall>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT * FROM ai_tool_calls ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        rows.iter().map(row_to_ai_tool_call).collect()
+    }
+}
+
+fn row_to_ai_tool_call(row: &SqliteRow) -> Result<AiToolCall, DomainError> {
+    Ok(AiToolCall {
+        id: row.get("id"),
+        tool_name: row.get("tool_name"),
+        arguments: row.get("arguments"),
+        result: row.get("result"),
+        error: row.get("error"),
+        duration_ms: row.get::<i64, _>("duration_ms") as u64,
+        created_at: row.get::<i64, _>("created_at") as u64,
     })
 }
