@@ -1,6 +1,7 @@
 //! 闲鱼网关实现：Http（真实接口，待实现）与 Mock（开发用假数据）。
 
 use async_trait::async_trait;
+use tokio::time::Duration;
 
 use crate::application::ports::XianYuGateway;
 use crate::domain::crawl_task::now_unix;
@@ -55,6 +56,8 @@ impl XianYuGateway for MockXianYuGateway {
                 }
             })
             .collect();
+        // 模拟单次抓取耗时约 5 秒
+        tokio::time::sleep(Duration::from_secs(5)).await;
         Ok(items)
     }
 }
