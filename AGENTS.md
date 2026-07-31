@@ -5,8 +5,18 @@
 ## 构建与运行
 
 ```bash
+# 前端：React + TS 源码在 web/，构建产物输出到 static/
+cd web && npm install && npm run build
+
+# 后端（同时托管 static/ 下的前端）
 cargo build
 cargo run        # 默认 http://127.0.0.1:3000
+```
+
+前端日常开发：
+
+```bash
+cd web && npm run dev   # http://127.0.0.1:5173，/api 自动代理到 127.0.0.1:3000（需后端已启动）
 ```
 
 环境变量配置（见 `src/infrastructure/config.rs`）：
@@ -64,8 +74,22 @@ src/
     └── persistence/
         ├── memory.rs    #   内存仓储：商品、抓取任务（重启即失）
         └── sqlite.rs    #   SQLite 仓储：标签、待爬取商品、抓取队列+条目、AI 配置与审计（共享连接池，启动自动建表）
-static/                  # 前端（原生 HTML/JS/CSS，无构建步骤，由 axum 托管）
+static/                  # 前端构建产物（由 web/ 执行 npm run build 生成，axum 托管，勿手改）
+web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + shadcn/ui
+├── src/types/generated/ #   ts-rs 从 dto.rs 自动生成的类型（cargo test export_bindings，勿手改）
+├── src/types/api.ts     #   类型的友好别名 re-export + 手写 ApiResponse<T> 包装
+├── src/lib/api.ts       #   fetch 封装：解包 ApiResponse<T>，code!==0 抛错
+└── src/sections/        #   页面区块：KpiStrip（概览条）/ QueuesCard / ProductsCard / TagsCard / ItemsCard / AiCard + SkeletonRows（共享骨架行）
 ```
+
+前端约定：
+
+- `web/vite.config.ts`：dev 端口 5173（避让后端 3000），`/api` 代理到 `127.0.0.1:3000`；`build.outDir` 指向 `../static` 且 `emptyOutDir`，构建即覆盖旧产物。
+- 前端用 `react-router` 的 **HashRouter**（避免 axum 静态托管需要路由回退）+ 左侧固定导航（移动端为 Sheet 抽屉）：五个页面 = 概览（KpiStrip + QueuesCard）/ 商品管理 / 标签管理 / 抓取数据 / AI。全局状态仍在 `App.tsx` 集中管理，路由页面只是视图，切页不打断队列轮询；通知用 sonner toast。
+- 队列轮询逻辑在 `App.tsx::loadQueues`：有 waiting/running 队列时每 2 秒自刷新，刚全部结束时补刷商品统计与原始数据。
+- **前后端类型自动同步（ts-rs）**：`interfaces/dto.rs` 的 DTO 全部 `#[derive(TS)]` + `#[ts(export)]`，运行 `cargo test export_bindings` 会把 TS 类型写入 `web/src/types/generated/`（导出目录配置在 `.cargo/config.toml` 的 `TS_RS_EXPORT_DIR`）。前端 `web/src/types/api.ts` 只做别名 re-export（`TagResponse`→`Tag` 等）与 `ApiResponse<T>` 手写包装，**不再手工维护字段**。改 dto.rs 后必须重跑导出 + `npm run build`。
+  - 新增 DTO 的 `i64`/`u64`/`Vec<i64>` 字段必须标 `#[ts(type = "number")]` / `#[ts(type = "Array<number>")]`（ts-rs 默认映射 bigint，与 JSON 实际序列化不符）。
+  - `ApiResponse<T>` 泛型不经 ts-rs 导出；`QueueResponse.status` 在 Rust 是 `String`，前端 `api.ts` 里收窄为 `QueueStatus` 联合类型。
 
 ## 核心设计决策
 

@@ -1,6 +1,7 @@
 //! HTTP 请求/响应 DTO：与 domain 模型解耦，serde 注解只属于这一层。
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::application::ai_provider_service::{AiStatus, TestConnectionResult};
 use crate::application::ai::classify_service::{ClassifySuggestion, ClassifySyncResult};
@@ -14,7 +15,8 @@ use crate::domain::item::Item;
 use crate::domain::product::Product;
 use crate::domain::tag::Tag;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct CrawlRequest {
     pub keyword: String,
     #[serde(default = "default_max_pages")]
@@ -25,7 +27,8 @@ fn default_max_pages() -> u32 {
     1
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct TaskResponse {
     pub id: String,
     pub keyword: String,
@@ -33,6 +36,7 @@ pub struct TaskResponse {
     pub status: String,
     pub item_count: usize,
     pub error: Option<String>,
+    #[ts(type = "number")]
     pub created_at: u64,
 }
 
@@ -56,13 +60,15 @@ impl From<CrawlTask> for TaskResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ItemResponse {
     pub id: String,
     pub title: String,
     pub price: f64,
     pub seller: String,
     pub url: String,
+    #[ts(type = "number")]
     pub crawled_at: u64,
 }
 
@@ -81,26 +87,32 @@ impl From<Item> for ItemResponse {
 
 // ---------- 标签 ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct TagCreateRequest {
     pub name: String,
     pub remark: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct TagUpdateRequest {
     pub name: Option<String>,
     pub enabled: Option<bool>,
     pub remark: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct TagResponse {
+    #[ts(type = "number")]
     pub id: i64,
     pub name: String,
     pub enabled: bool,
     pub remark: Option<String>,
+    #[ts(type = "number")]
     pub created_at: u64,
+    #[ts(type = "number")]
     pub updated_at: u64,
 }
 
@@ -119,26 +131,33 @@ impl From<Tag> for TagResponse {
 
 // ---------- 待爬取商品 ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct ProductCreateRequest {
     pub name: String,
     /// 不传或空数组 = 无标签
+    #[ts(type = "Array<number> | null")]
     pub tag_ids: Option<Vec<i64>>,
     pub remark: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct ProductUpdateRequest {
     pub name: Option<String>,
     /// 不传=不修改，空数组=清空全部标签，非空数组=整体替换
+    #[ts(type = "Array<number> | null")]
     pub tag_ids: Option<Vec<i64>>,
     pub remark: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ProductResponse {
+    #[ts(type = "number")]
     pub id: i64,
     pub name: String,
+    #[ts(type = "Array<number>")]
     pub tag_ids: Vec<i64>,
     /// 标签名列表，与 tag_ids 一一对应；无标签时为空数组
     pub tag_names: Vec<String>,
@@ -146,9 +165,12 @@ pub struct ProductResponse {
     pub median_price: Option<f64>,
     pub avg_price: Option<f64>,
     pub crawled_count: Option<u32>,
+    #[ts(type = "number | null")]
     pub last_crawled_at: Option<u64>,
     pub recycle_price: Option<f64>,
+    #[ts(type = "number")]
     pub created_at: u64,
+    #[ts(type = "number")]
     pub updated_at: u64,
 }
 
@@ -172,21 +194,27 @@ impl ProductResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ProductBriefResponse {
+    #[ts(type = "number")]
     pub id: i64,
     pub name: String,
 }
 
 // ---------- 抓取队列 ----------
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, TS)]
+#[ts(export)]
 pub struct SelectorDto {
     #[serde(default)]
+    #[ts(type = "Array<number>")]
     pub tag_all: Vec<i64>,
     #[serde(default)]
+    #[ts(type = "Array<number>")]
     pub tag_any: Vec<i64>,
     #[serde(default)]
+    #[ts(type = "Array<number>")]
     pub tag_exclude: Vec<i64>,
     pub stale_days: Option<u32>,
 }
@@ -203,32 +231,41 @@ impl From<SelectorDto> for Selector {
 }
 
 /// 预览请求：选择器或商品 id 列表，二选一
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct PreviewRequest {
     pub selector: Option<SelectorDto>,
+    #[ts(type = "Array<number> | null")]
     pub product_ids: Option<Vec<i64>>,
 }
 
 /// 入队/追加请求：目标 + 间隔（追加时间隔忽略）
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct EnqueueRequest {
     pub selector: Option<SelectorDto>,
+    #[ts(type = "Array<number> | null")]
     pub product_ids: Option<Vec<i64>>,
     pub interval_secs: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct PreviewResponse {
     pub to_add: Vec<ProductBriefResponse>,
     pub skipped: Vec<ProductBriefResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct QueueResponse {
+    #[ts(type = "number")]
     pub id: i64,
     pub status: String,
     pub interval_secs: u32,
+    #[ts(type = "number")]
     pub created_at: u64,
+    #[ts(type = "number | null")]
     pub finished_at: Option<u64>,
     pub total: usize,
     pub pending: usize,
@@ -257,8 +294,10 @@ impl From<QueueProgress> for QueueResponse {
 }
 
 /// 入队/追加响应：队列 + 明细
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct EnqueueResponse {
+    #[ts(type = "number")]
     pub queue_id: i64,
     pub status: String,
     pub added: Vec<ProductBriefResponse>,
@@ -267,7 +306,8 @@ pub struct EnqueueResponse {
 
 // ---------- AI 配置 ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct AiProviderCreateRequest {
     pub name: String,
     pub base_url: String,
@@ -279,7 +319,8 @@ pub struct AiProviderCreateRequest {
     pub max_retries: u32,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, TS)]
+#[ts(export)]
 pub struct AiProviderUpdateRequest {
     pub name: Option<String>,
     pub base_url: Option<String>,
@@ -297,8 +338,10 @@ fn default_max_retries() -> u32 {
     2
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct AiProviderResponse {
+    #[ts(type = "number")]
     pub id: i64,
     pub name: String,
     pub base_url: String,
@@ -308,7 +351,9 @@ pub struct AiProviderResponse {
     pub timeout_secs: u32,
     pub max_retries: u32,
     pub is_default: bool,
+    #[ts(type = "number")]
     pub created_at: u64,
+    #[ts(type = "number")]
     pub updated_at: u64,
 }
 
@@ -330,8 +375,10 @@ impl From<AiProvider> for AiProviderResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct TestConnectionResponse {
+    #[ts(type = "number")]
     pub latency_ms: u64,
     pub reply: String,
 }
@@ -345,7 +392,8 @@ impl From<TestConnectionResult> for TestConnectionResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct AiStatusResponse {
     pub configured: bool,
     pub source: Option<String>,
@@ -364,14 +412,18 @@ impl From<AiStatus> for AiStatusResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct AiToolCallResponse {
+    #[ts(type = "number")]
     pub id: i64,
     pub tool_name: String,
     pub arguments: String,
     pub result: Option<String>,
     pub error: Option<String>,
+    #[ts(type = "number")]
     pub duration_ms: u64,
+    #[ts(type = "number")]
     pub created_at: u64,
 }
 
@@ -389,7 +441,7 @@ impl From<AiToolCall> for AiToolCallResponse {
     }
 }
 
-/// 统一 API 响应结构
+/// 统一 API 响应结构（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub code: i32,
@@ -417,19 +469,23 @@ impl<T: Serialize> ApiResponse<T> {
 
 // ---------- 批量导入 ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct ProductBatchCreateRequest {
     pub names: Vec<String>,
+    #[ts(type = "Array<number> | null")]
     pub tag_ids: Option<Vec<i64>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ProductBatchCreateResponse {
     pub created: Vec<ProductResponse>,
     pub skipped: Vec<BatchSkippedItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct BatchSkippedItem {
     pub name: String,
     pub reason: String,
@@ -437,12 +493,15 @@ pub struct BatchSkippedItem {
 
 // ---------- AI 自动打标签 ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct ClassifyProductsRequest {
+    #[ts(type = "Array<number>")]
     pub product_ids: Vec<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ClassifyProductsResponse {
     pub summary: String,
     pub suggestions: Vec<ClassifySuggestionDto>,
@@ -459,9 +518,12 @@ impl From<ClassifySyncResult> for ClassifyProductsResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ClassifySuggestionDto {
+    #[ts(type = "number")]
     pub product_id: i64,
+    #[ts(type = "Array<number>")]
     pub tag_ids: Vec<i64>,
 }
 
@@ -474,7 +536,8 @@ impl From<ClassifySuggestion> for ClassifySuggestionDto {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ClassifyTaskResponse {
     pub id: String,
     pub status: String,
@@ -486,7 +549,9 @@ pub struct ClassifyTaskResponse {
     pub warnings: Vec<ClassifyWarningDto>,
     pub current_batch: usize,
     pub error: Option<String>,
+    #[ts(type = "number")]
     pub created_at: u64,
+    #[ts(type = "number | null")]
     pub finished_at: Option<u64>,
 }
 
@@ -521,8 +586,10 @@ impl From<AiClassifyTask> for ClassifyTaskResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct ClassifyWarningDto {
+    #[ts(type = "number")]
     pub product_id: i64,
     pub message: String,
 }

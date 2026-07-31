@@ -1,0 +1,3 @@
+# ts-rs 导出目录：cargo test export_bindings 时把 DTO 的 TS 类型写到前端源码树
+[env]
+TS_RS_EXPORT_DIR = { value = "web/src/types/generated", relative = true }
