@@ -43,20 +43,22 @@ src/
 │   ├── mod.rs           #   build_router() + AppState（应用服务句柄）
 │   ├── dto.rs           #   HTTP 请求/响应结构，与 domain 模型解耦
 │   ├── crawl_handler.rs #   POST /api/crawl、GET /api/crawl/{id}
-│   ├── item_handler.rs  #   GET /api/items
+│   ├── item_handler.rs  #   GET /api/items（分页；normalize_page 钳制页码，供各 handler 复用）
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
-│   ├── product_handler.rs#  GET/POST /api/products、GET/PUT/DELETE /api/products/{id}
+│   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
-│   └── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计
+│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）
+│   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
 │   ├── crawl_service.rs #   创建抓取任务 → 后台 tokio task 逐页抓取 → 落库
-│   ├── item_service.rs  #   商品列表查询
+│   ├── item_service.rs  #   商品列表查询（分页）
 │   ├── tag_service.rs   #   标签 CRUD（重名冲突校验、部分字段更新）
-│   ├── product_service.rs#  待爬取商品 CRUD（重名校验、标签存在校验）
+│   ├── product_service.rs#  待爬取商品 CRUD（重名校验、标签存在校验）+ 分页排序列表
 │   ├── queue_service.rs #   抓取队列：选择器解析、入队去重、全局唯一 worker 串行消费
 │   ├── ai_provider_service.rs # AI 供应商配置管理 + 连通性测试
-│   └── ai_tool_call_service.rs # AI 工具调用审计查询
+│   ├── ai_tool_call_service.rs # AI 工具调用审计查询（分页）
+│   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
 │   ├── crawl_task.rs    #   CrawlTask 实体：状态流转规则只写在实体方法里
@@ -79,7 +81,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + sh
 ├── src/types/generated/ #   ts-rs 从 dto.rs 自动生成的类型（cargo test export_bindings，勿手改）
 ├── src/types/api.ts     #   类型的友好别名 re-export + 手写 ApiResponse<T> 包装
 ├── src/lib/api.ts       #   fetch 封装：解包 ApiResponse<T>，code!==0 抛错
-└── src/sections/        #   页面区块：KpiStrip（概览条）/ QueuesCard / ProductsCard / TagsCard / ItemsCard / AiCard + SkeletonRows（共享骨架行）
+└── src/sections/        #   页面区块：KpiStrip（概览条）/ QueuesCard / ProductsCard / TagsCard / ItemsCard / AiCard + Pager（通用分页条）+ SkeletonRows（共享骨架行）
 ```
 
 前端约定：
@@ -100,6 +102,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + sh
 - **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
 - **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）只由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
 - **删除语义**：数据库层一律 `CASCADE` 兜底（删标签/删商品只清关联，另一方不受影响）；交互层做影响提示——`GET /api/tags/{id}/products` 返回使用该标签的商品，前端删除标签前在确认框中列出受影响商品。不做「阻止删除」。
+- **列表分页**：`/api/items`、`/api/products`、`/api/ai/tool-calls` 三个列表接口服务端分页，统一 `page`（从 1 起）/ `page_size`（默认 20，clamp 1..=100，钳制逻辑在 `item_handler::normalize_page`），响应为 `PageResponse<T> { items, total, page, page_size }`（`PageResponse<T>` 泛型不经 ts-rs 导出，前端 `api.ts` 手写）。商品列表支持服务端排序（`sort_by`/`sort_dir`，排序列白名单枚举 `ProductSortColumn` 在 `domain/repository.rs`，SQL 空值沉底）；前端列头排序只是改查询条件回第 1 页。tags 和 queues 不分页（标签是全局选项源，队列轮询需全量活跃视图）。KPI 概览不从列表数据推导，由 `GET /api/stats` 提供（product_count / crawled_today=滚动 24h 窗口 / last_crawled_at）。
 - **抓取队列**（详细方案见 `docs/design-crawl-queue.md`）：
   - 队列 = 商品 id 快照（`crawl_entries`），入队后改标签/规则不影响本队列；删除商品时其条目由 worker 标记为 `skipped`，不阻塞队列。
   - 入队方式二选一：`selector`（`tag_all`/`tag_any`/`tag_exclude`/`stale_days`，维度间 AND）或 `product_ids`（手动勾选）；入队前可 `POST /api/queues/preview` 预览命中与跳过。

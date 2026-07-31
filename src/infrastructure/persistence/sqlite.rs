@@ -12,7 +12,8 @@ use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatu
 use crate::domain::error::DomainError;
 use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{
-    AiProviderRepository, AiToolCallRepository, ProductRepository, QueueRepository, TagRepository,
+    AiProviderRepository, AiToolCallRepository, Page, ProductRepository, ProductSortColumn,
+    QueueRepository, TagRepository,
 };
 use crate::domain::tag::{NewTag, Tag, TagName};
 
@@ -335,6 +336,51 @@ impl ProductRepository for SqliteProductRepository {
             .await
             .map_err(to_infra)?;
         rows.iter().map(row_to_product).collect()
+    }
+
+    async fn count(&self) -> Result<u64, DomainError> {
+        let row = sqlx::query("SELECT COUNT(*) AS c FROM products")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(row.get::<i64, _>("c") as u64)
+    }
+
+    async fn max_last_crawled_at(&self) -> Result<Option<u64>, DomainError> {
+        let row = sqlx::query("SELECT MAX(last_crawled_at) AS m FROM products")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(row.get::<Option<i64>, _>("m").map(|t| t as u64))
+    }
+
+    async fn list_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+        sort: Option<(ProductSortColumn, bool)>,
+    ) -> Result<Page<Product>, DomainError> {
+        let order_by = match sort {
+            // 空值列永远沉底：(col IS NULL) 排最前键；同值按 id 稳定次序
+            Some((col, desc)) => format!(
+                "ORDER BY ({col} IS NULL) ASC, {col} {dir}, p.id ASC",
+                col = col.as_sql(),
+                dir = if desc { "DESC" } else { "ASC" },
+            ),
+            None => "ORDER BY p.created_at ASC".to_string(),
+        };
+        let rows = sqlx::query(&format!("{PRODUCT_SELECT} {order_by} LIMIT ? OFFSET ?"))
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        let items = rows
+            .iter()
+            .map(row_to_product)
+            .collect::<Result<Vec<_>, _>>()?;
+        let total = self.count().await?;
+        Ok(Page { items, total })
     }
 
     async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError> {
@@ -821,15 +867,27 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
         })
     }
 
-    async fn list_recent(&self, limit: u32) -> Result<Vec<AiToolCall>, DomainError> {
+    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<AiToolCall>, DomainError> {
         let rows = sqlx::query(
-            "SELECT * FROM ai_tool_calls ORDER BY created_at DESC, id DESC LIMIT ?",
+            "SELECT * FROM ai_tool_calls ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
         )
         .bind(limit as i64)
+        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await
         .map_err(to_infra)?;
-        rows.iter().map(row_to_ai_tool_call).collect()
+        let items = rows
+            .iter()
+            .map(row_to_ai_tool_call)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let count_row = sqlx::query("SELECT COUNT(*) AS c FROM ai_tool_calls")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        let total = count_row.get::<i64, _>("c") as u64;
+
+        Ok(Page { items, total })
     }
 }
 

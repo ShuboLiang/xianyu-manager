@@ -1,30 +1,39 @@
 use std::collections::HashMap;
 
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Path, Query, State};
 
 use crate::domain::product::Product;
 
 use super::dto::{
-    ApiResponse, ProductBatchCreateRequest, ProductBatchCreateResponse, ProductCreateRequest,
-    ProductResponse, ProductUpdateRequest, BatchSkippedItem,
+    ApiResponse, PageResponse, ProductBatchCreateRequest, ProductBatchCreateResponse,
+    ProductCreateRequest, ProductListQuery, ProductResponse, ProductUpdateRequest,
+    BatchSkippedItem,
 };
+use super::item_handler::normalize_page;
 use super::AppState;
 
-/// GET /api/products：商品列表（含标签名）
+/// GET /api/products?page=1&page_size=20&sort_by=avg_price&sort_dir=desc：商品列表（分页 + 服务端排序）
 pub async fn list_products(
     State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<ProductResponse>>> {
-    match state.product_service.list_products().await {
-        Ok(products) => {
+    Query(q): Query<ProductListQuery>,
+) -> Json<ApiResponse<PageResponse<ProductResponse>>> {
+    let (page, page_size) = normalize_page(q.page, q.page_size);
+    match state
+        .product_service
+        .list_paginated(page, page_size, q.sort_by, q.sort_dir)
+        .await
+    {
+        Ok(p) => {
             let tag_names = tag_name_map(&state).await;
-            let data = products
+            let items = p
+                .items
                 .into_iter()
-                .map(|p| {
-                    let names = resolve_names(&p, &tag_names);
-                    ProductResponse::from_product(p, names)
+                .map(|prod| {
+                    let names = resolve_names(&prod, &tag_names);
+                    ProductResponse::from_product(prod, names)
                 })
                 .collect();
-            Json(ApiResponse::ok(data))
+            Json(ApiResponse::ok(PageResponse::new(items, p.total, page, page_size)))
         }
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }

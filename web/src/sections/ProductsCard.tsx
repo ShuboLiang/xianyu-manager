@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ArrowDown, ArrowUp, ArrowUpDown, Package } from 'lucide-react';
 import {
@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { apiDelete, apiGet, apiPost, apiPut, fmtPrice, fmtTime } from '@/lib/api';
+import { Pager } from '@/sections/Pager';
 import { SkeletonRows } from '@/sections/SkeletonRows';
 import type {
   ClassifyProductsResponse,
@@ -49,9 +50,16 @@ import type {
 } from '@/types/api';
 
 interface Props {
-  products: Product[];
+  products: Product[]; // 当前页数据（服务端分页 + 排序）
+  total: number;
+  page: number;
+  pageSize: number;
+  sortBy: string | null;
+  sortDir: 'asc' | 'desc';
   tags: Tag[];
   loading?: boolean;
+  onPageChange: (page: number, pageSize: number) => void;
+  onSortChange: (sortBy: SortKey) => void;
   onRefresh: () => void;
   onRefreshAiCalls: () => void;
   onEnqueueProducts: (ids: number[]) => Promise<boolean>;
@@ -59,49 +67,39 @@ interface Props {
 
 const TERMINAL_TASK_STATUS = ['done', 'failed', 'cancelled'];
 
-// 可排序的数值/时间列：空值永远排在最后
+// 可排序的数值/时间列：服务端排序，空值永远排在最后
 type SortKey = 'median_price' | 'avg_price' | 'crawled_count' | 'last_crawled_at' | 'recycle_price';
 
-export function ProductsCard({ products, tags, loading, onRefresh, onRefreshAiCalls, onEnqueueProducts }: Props) {
+export function ProductsCard({
+  products,
+  total,
+  page,
+  pageSize,
+  sortBy,
+  sortDir,
+  tags,
+  loading,
+  onPageChange,
+  onSortChange,
+  onRefresh,
+  onRefreshAiCalls,
+  onEnqueueProducts,
+}: Props) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [remark, setRemark] = useState('');
   const [formTagIds, setFormTagIds] = useState<Set<number>>(new Set());
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-
-  const toggleSort = (k: SortKey) => {
-    if (sortKey === k) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortKey(k);
-      setSortDir('desc');
-    }
-  };
-
-  const sortedProducts = useMemo(() => {
-    if (!sortKey) return products;
-    const dir = sortDir === 'asc' ? 1 : -1;
-    return [...products].sort((a, b) => {
-      const va = a[sortKey];
-      const vb = b[sortKey];
-      if (va === null && vb === null) return 0;
-      if (va === null) return 1; // 空值永远沉底
-      if (vb === null) return -1;
-      return (va - vb) * dir;
-    });
-  }, [products, sortKey, sortDir]);
 
   const SortHead = ({ label, k }: { label: string; k: SortKey }) => (
     <TableHead>
       <button
         className="flex items-center gap-1 whitespace-nowrap hover:text-foreground"
-        onClick={() => toggleSort(k)}
+        onClick={() => onSortChange(k)}
       >
         {label}
-        {sortKey === k ? (
+        {sortBy === k ? (
           sortDir === 'asc' ? (
             <ArrowUp className="h-3 w-3" />
           ) : (
@@ -410,23 +408,24 @@ export function ProductsCard({ products, tags, loading, onRefresh, onRefreshAiCa
             </EmptyHeader>
           </Empty>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-8"></TableHead>
-                <TableHead>商品名</TableHead>
-                <TableHead>标签</TableHead>
-                <SortHead label="中位数" k="median_price" />
-                <SortHead label="均价" k="avg_price" />
-                <SortHead label="爬取数量" k="crawled_count" />
-                <SortHead label="最后爬取" k="last_crawled_at" />
-                <SortHead label="回收价" k="recycle_price" />
-                <TableHead>备注</TableHead>
-                <TableHead>操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sortedProducts.map((p) => (
+          <div className="space-y-3">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8"></TableHead>
+                  <TableHead>商品名</TableHead>
+                  <TableHead>标签</TableHead>
+                  <SortHead label="中位数" k="median_price" />
+                  <SortHead label="均价" k="avg_price" />
+                  <SortHead label="爬取数量" k="crawled_count" />
+                  <SortHead label="最后爬取" k="last_crawled_at" />
+                  <SortHead label="回收价" k="recycle_price" />
+                  <TableHead>备注</TableHead>
+                  <TableHead>操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+              {products.map((p) => (
                 <TableRow key={p.id}>
                   <TableCell>
                     <Checkbox
@@ -464,7 +463,9 @@ export function ProductsCard({ products, tags, loading, onRefresh, onRefreshAiCa
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+            </Table>
+            <Pager page={page} pageSize={pageSize} total={total} onChange={onPageChange} />
+          </div>
         )}
 
         <Dialog open={batchOpen} onOpenChange={setBatchOpen}>

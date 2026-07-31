@@ -1,12 +1,11 @@
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { fmtTime } from '@/lib/api';
-import type { Item, Product, QueueProgress } from '@/types/api';
+import type { QueueProgress, StatsResponse } from '@/types/api';
 
 interface Props {
+  stats: StatsResponse | null;
   queues: QueueProgress[];
-  products: Product[];
-  items: Item[];
   loading?: boolean;
 }
 
@@ -18,33 +17,24 @@ interface Stat {
   small?: boolean;
 }
 
-export function KpiStrip({ queues, products, items, loading }: Props) {
+export function KpiStrip({ stats, queues, loading }: Props) {
   const runningCount = queues.filter((q) => q.status === 'running').length;
   const pendingEntries = queues
     .filter((q) => ACTIVE_STATUSES.includes(q.status))
     .reduce((sum, q) => sum + q.pending + q.running, 0);
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const crawledToday = items.filter((it) => it.crawled_at * 1000 >= todayStart.getTime()).length;
-
-  const lastCrawled = products.reduce<number | null>(
-    (max, p) => (p.last_crawled_at && (!max || p.last_crawled_at > max) ? p.last_crawled_at : max),
-    null,
-  );
-
-  const stats: Stat[] = [
+  const statsItems: Stat[] = [
     { label: '运行中队列', value: String(runningCount) },
     { label: '待处理条目', value: String(pendingEntries) },
-    { label: '商品总数', value: String(products.length) },
-    { label: '今日抓取', value: String(crawledToday) },
-    { label: '最后爬取', value: fmtTime(lastCrawled), small: true },
+    { label: '商品总数', value: stats ? String(stats.product_count) : '-' },
+    { label: '24h 抓取', value: stats ? String(stats.crawled_today) : '-' },
+    { label: '最后爬取', value: stats ? fmtTime(stats.last_crawled_at) : '-', small: true },
   ];
 
   return (
     <Card className="py-0">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x">
-        {stats.map((s) => (
+        {statsItems.map((s) => (
           <div key={s.label} className="px-4 py-3.5">
             <p className="text-xs text-muted-foreground">{s.label}</p>
             {loading ? (

@@ -467,6 +467,65 @@ impl<T: Serialize> ApiResponse<T> {
     }
 }
 
+// ---------- 分页与全局统计 ----------
+
+/// 通用分页查询参数（page 从 1 开始）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct PageQuery {
+    #[ts(type = "number | null")]
+    pub page: Option<u64>,
+    #[ts(type = "number | null")]
+    pub page_size: Option<u64>,
+}
+
+/// 商品列表查询参数：分页 + 服务端排序
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ProductListQuery {
+    #[ts(type = "number | null")]
+    pub page: Option<u64>,
+    #[ts(type = "number | null")]
+    pub page_size: Option<u64>,
+    /// 白名单：median_price / avg_price / crawled_count / last_crawled_at / recycle_price
+    pub sort_by: Option<String>,
+    /// asc / desc（默认 desc）
+    pub sort_dir: Option<String>,
+}
+
+/// 分页响应（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）
+#[derive(Debug, Serialize)]
+pub struct PageResponse<T: Serialize> {
+    pub items: Vec<T>,
+    pub total: u64,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+impl<T: Serialize> PageResponse<T> {
+    pub fn new(items: Vec<T>, total: u64, page: u64, page_size: u64) -> Self {
+        Self {
+            items,
+            total,
+            page,
+            page_size,
+        }
+    }
+}
+
+/// KPI 概览统计（与列表分页解耦）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct StatsResponse {
+    #[ts(type = "number")]
+    pub product_count: u64,
+    #[ts(type = "number | null")]
+    pub last_crawled_at: Option<u64>,
+    /// 近 24 小时抓取数量
+    #[ts(type = "number")]
+    pub crawled_today: u64,
+}
+
 // ---------- 批量导入 ----------
 
 #[derive(Debug, Deserialize, TS)]

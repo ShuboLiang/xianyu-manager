@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::domain::error::DomainError;
 use crate::domain::product::{NewProduct, Product, ProductName};
-use crate::domain::repository::{ProductRepository, TagRepository};
+use crate::domain::repository::{Page, ProductRepository, ProductSortColumn, TagRepository};
 
 /// 单次批量导入的数量上限
 const BATCH_CREATE_LIMIT: usize = 1000;
@@ -122,8 +122,26 @@ impl ProductService {
             .ok_or_else(|| DomainError::NotFound(format!("商品 {id}")))
     }
 
-    pub async fn list_products(&self) -> Result<Vec<Product>, DomainError> {
-        self.products.list().await
+    /// 分页查询（page 从 1 开始，调用方已完成钳制）；sort_by 非法时返回 InvalidInput
+    pub async fn list_paginated(
+        &self,
+        page: u64,
+        page_size: u64,
+        sort_by: Option<String>,
+        sort_dir: Option<String>,
+    ) -> Result<Page<Product>, DomainError> {
+        let sort = match sort_by {
+            Some(s) => {
+                let col = ProductSortColumn::parse(&s)
+                    .ok_or_else(|| DomainError::InvalidInput(format!("不支持的排序字段: {s}")))?;
+                let desc = sort_dir.as_deref() != Some("asc");
+                Some((col, desc))
+            }
+            None => None,
+        };
+        self.products
+            .list_paginated((page - 1) * page_size, page_size, sort)
+            .await
     }
 
     /// 使用某个标签的全部商品（删除标签前的影响提示）

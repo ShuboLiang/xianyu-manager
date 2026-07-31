@@ -18,16 +18,21 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { fmtTime } from '@/lib/api';
+import { Pager } from '@/sections/Pager';
 import { SkeletonRows } from '@/sections/SkeletonRows';
 import type { Item } from '@/types/api';
 
 interface Props {
-  items: Item[];
+  items: Item[]; // 当前页数据（服务端分页）
+  total: number;
+  page: number;
+  pageSize: number;
   loading?: boolean;
+  onPageChange: (page: number, pageSize: number) => void;
   onRefresh: () => void;
 }
 
-export function ItemsCard({ items, loading, onRefresh }: Props) {
+export function ItemsCard({ items, total, page, pageSize, loading, onPageChange, onRefresh }: Props) {
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
@@ -59,32 +64,35 @@ export function ItemsCard({ items, loading, onRefresh }: Props) {
             </EmptyContent>
           </Empty>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>标题</TableHead>
-                <TableHead>价格</TableHead>
-                <TableHead>卖家</TableHead>
-                <TableHead>抓取时间</TableHead>
-                <TableHead>链接</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((it) => (
-                <TableRow key={it.id}>
-                  <TableCell>{it.title}</TableCell>
-                  <TableCell className="font-data">¥{it.price}</TableCell>
-                  <TableCell>{it.seller}</TableCell>
-                  <TableCell className="whitespace-nowrap">{fmtTime(it.crawled_at)}</TableCell>
-                  <TableCell>
-                    <a className="text-primary hover:underline" href={it.url} target="_blank" rel="noreferrer">
-                      查看
-                    </a>
-                  </TableCell>
+          <div className="space-y-3">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>标题</TableHead>
+                  <TableHead>价格</TableHead>
+                  <TableHead>卖家</TableHead>
+                  <TableHead>抓取时间</TableHead>
+                  <TableHead>链接</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {items.map((it) => (
+                  <TableRow key={it.id}>
+                    <TableCell>{it.title}</TableCell>
+                    <TableCell className="font-data">¥{it.price}</TableCell>
+                    <TableCell>{it.seller}</TableCell>
+                    <TableCell className="whitespace-nowrap">{fmtTime(it.crawled_at)}</TableCell>
+                    <TableCell>
+                      <a className="text-primary hover:underline" href={it.url} target="_blank" rel="noreferrer">
+                        查看
+                      </a>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <Pager page={page} pageSize={pageSize} total={total} onChange={onPageChange} />
+          </div>
         )}
       </CardContent>
     </Card>

@@ -33,11 +33,24 @@ import type {
   AiToolCall,
   EnqueueResponse,
   Item,
+  PageResponse,
   Product,
   QueueProgress,
   Selector,
+  StatsResponse,
   Tag,
 } from '@/types/api';
+
+// 分页查询条件（App 层持有，卡片只是视图）
+interface PageQuery {
+  page: number;
+  pageSize: number;
+}
+
+interface ProductsQuery extends PageQuery {
+  sortBy: string | null;
+  sortDir: 'asc' | 'desc';
+}
 
 // 侧边导航：概览（监控）/ 商品 / 标签 / 数据 / AI（低频配置）
 const NAV_ITEMS: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
@@ -53,12 +66,38 @@ export default function App() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [tags, setTags] = useState<Tag[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [queues, setQueues] = useState<QueueProgress[]>([]);
-  const [items, setItems] = useState<Item[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
-  const [aiToolCalls, setAiToolCalls] = useState<AiToolCall[]>([]);
+  const [stats, setStats] = useState<StatsResponse | null>(null);
+
+  // 分页列表：查询条件 + 当前页数据（商品/原始数据/AI 调用记录）
+  const [productsQuery, setProductsQuery] = useState<ProductsQuery>({
+    page: 1,
+    pageSize: 20,
+    sortBy: null,
+    sortDir: 'desc',
+  });
+  const [productsPage, setProductsPage] = useState<PageResponse<Product>>({
+    items: [],
+    total: 0,
+    page: 1,
+    page_size: 20,
+  });
+  const [itemsQuery, setItemsQuery] = useState<PageQuery>({ page: 1, pageSize: 20 });
+  const [itemsPage, setItemsPage] = useState<PageResponse<Item>>({
+    items: [],
+    total: 0,
+    page: 1,
+    page_size: 20,
+  });
+  const [aiCallsQuery, setAiCallsQuery] = useState<PageQuery>({ page: 1, pageSize: 20 });
+  const [aiCallsPage, setAiCallsPage] = useState<PageResponse<AiToolCall>>({
+    items: [],
+    total: 0,
+    page: 1,
+    page_size: 20,
+  });
 
   const [appendTarget, setAppendTarget] = useState<number | null>(null);
   const [intervalSecs, setIntervalSecs] = useState(3);
@@ -76,21 +115,92 @@ export default function App() {
     }
   }, []);
 
-  const loadProducts = useCallback(async () => {
+  const loadProducts = useCallback(
+    async (q: ProductsQuery = productsQuery) => {
+      const params = new URLSearchParams({ page: String(q.page), page_size: String(q.pageSize) });
+      if (q.sortBy) {
+        params.set('sort_by', q.sortBy);
+        params.set('sort_dir', q.sortDir);
+      }
+      try {
+        setProductsPage(await apiGet<PageResponse<Product>>(`/api/products?${params}`));
+      } catch {
+        /* ignore */
+      }
+    },
+    [productsQuery],
+  );
+
+  const loadItems = useCallback(
+    async (q: PageQuery = itemsQuery) => {
+      try {
+        setItemsPage(await apiGet<PageResponse<Item>>(`/api/items?page=${q.page}&page_size=${q.pageSize}`));
+      } catch {
+        /* ignore */
+      }
+    },
+    [itemsQuery],
+  );
+
+  const loadAiCalls = useCallback(
+    async (q: PageQuery = aiCallsQuery) => {
+      try {
+        setAiCallsPage(
+          await apiGet<PageResponse<AiToolCall>>(`/api/ai/tool-calls?page=${q.page}&page_size=${q.pageSize}`),
+        );
+      } catch {
+        /* ignore */
+      }
+    },
+    [aiCallsQuery],
+  );
+
+  const loadStats = useCallback(async () => {
     try {
-      setProducts(await apiGet<Product[]>('/api/products'));
+      setStats(await apiGet<StatsResponse>('/api/stats'));
     } catch {
       /* ignore */
     }
   }, []);
 
-  const loadItems = useCallback(async () => {
-    try {
-      setItems(await apiGet<Item[]>('/api/items'));
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  // 分页/排序变更：更新查询条件并按新条件重新拉取（排序变更回到第 1 页）
+  const changeProductsPage = useCallback(
+    (page: number, pageSize: number) => {
+      const q = { ...productsQuery, page, pageSize };
+      setProductsQuery(q);
+      loadProducts(q);
+    },
+    [productsQuery, loadProducts],
+  );
+
+  const changeProductsSort = useCallback(
+    (sortBy: string) => {
+      const sortDir =
+        productsQuery.sortBy === sortBy && productsQuery.sortDir === 'desc' ? 'asc' : 'desc';
+      const q: ProductsQuery = { ...productsQuery, page: 1, sortBy, sortDir };
+      setProductsQuery(q);
+      loadProducts(q);
+    },
+    [productsQuery, loadProducts],
+  );
+
+  const changeItemsPage = useCallback(
+    (page: number, pageSize: number) => {
+      const q = { page, pageSize };
+      setItemsQuery(q);
+      loadItems(q);
+    },
+    [loadItems],
+  );
+
+  const changeAiCallsPage = useCallback(
+    (page: number, pageSize: number) => {
+      const q = { page, pageSize };
+      setAiCallsQuery(q);
+      loadAiCalls(q);
+    },
+    [loadAiCalls],
+  );
 
   const loadQueues = useCallback(async () => {
     try {
@@ -105,15 +215,16 @@ export default function App() {
         queueWasActive.current = true;
         pollTimer.current = setTimeout(loadQueues, 2000);
       } else if (queueWasActive.current) {
-        // 刚全部结束：最后刷新一次商品统计和原始数据
+        // 刚全部结束：最后刷新一次商品统计、原始数据和 KPI
         queueWasActive.current = false;
         loadProducts();
         loadItems();
+        loadStats();
       }
     } catch {
       /* ignore */
     }
-  }, [loadProducts, loadItems]);
+  }, [loadProducts, loadItems, loadStats]);
 
   const loadAi = useCallback(async () => {
     try {
@@ -123,14 +234,6 @@ export default function App() {
       ]);
       setAiProviders(providers);
       setAiStatus(status);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  const loadAiCalls = useCallback(async () => {
-    try {
-      setAiToolCalls(await apiGet<AiToolCall[]>('/api/ai/tool-calls?limit=20'));
     } catch {
       /* ignore */
     }
@@ -155,9 +258,10 @@ export default function App() {
       loadItems(),
       loadAi(),
       loadAiCalls(),
+      loadStats(),
     ]);
     setLoading(false);
-  }, [checkHealth, loadTags, loadProducts, loadQueues, loadItems, loadAi, loadAiCalls]);
+  }, [checkHealth, loadTags, loadProducts, loadQueues, loadItems, loadAi, loadAiCalls, loadStats]);
 
   useEffect(() => {
     loadAll();
@@ -167,7 +271,7 @@ export default function App() {
   }, [loadAll]);
 
   const onTagsChanged = useCallback(() => {
-    loadTags().then(loadProducts);
+    loadTags().then(() => loadProducts());
   }, [loadTags, loadProducts]);
 
   // ---------- 入队（选择器 / 商品 id 两种目标，追加模式共用） ----------
@@ -309,7 +413,7 @@ export default function App() {
                 path="/"
                 element={
                   <div className="space-y-6">
-                    <KpiStrip queues={queues} products={products} items={items} loading={loading} />
+                    <KpiStrip queues={queues} stats={stats} loading={loading} />
                     <QueuesCard
                       tags={tags}
                       queues={queues}
@@ -329,9 +433,16 @@ export default function App() {
                 path="/products"
                 element={
                   <ProductsCard
-                    products={products}
+                    products={productsPage.items}
+                    total={productsPage.total}
+                    page={productsQuery.page}
+                    pageSize={productsQuery.pageSize}
+                    sortBy={productsQuery.sortBy}
+                    sortDir={productsQuery.sortDir}
                     tags={tags}
                     loading={loading}
+                    onPageChange={changeProductsPage}
+                    onSortChange={changeProductsSort}
                     onRefresh={loadProducts}
                     onRefreshAiCalls={loadAiCalls}
                     onEnqueueProducts={enqueueProducts}
@@ -339,11 +450,30 @@ export default function App() {
                 }
               />
               <Route path="/tags" element={<TagsCard tags={tags} loading={loading} onChanged={onTagsChanged} />} />
-              <Route path="/items" element={<ItemsCard items={items} loading={loading} onRefresh={loadItems} />} />
+              <Route
+                path="/items"
+                element={
+                  <ItemsCard
+                    items={itemsPage.items}
+                    total={itemsPage.total}
+                    page={itemsQuery.page}
+                    pageSize={itemsQuery.pageSize}
+                    loading={loading}
+                    onPageChange={changeItemsPage}
+                    onRefresh={loadItems}
+                  />
+                }
+              />
               <Route
                 path="/ai"
                 element={
-                  <AiCard providers={aiProviders} status={aiStatus} toolCalls={aiToolCalls} onRefresh={loadAi} />
+                  <AiCard
+                    providers={aiProviders}
+                    status={aiStatus}
+                    toolCalls={aiCallsPage}
+                    onCallsPageChange={changeAiCallsPage}
+                    onRefresh={loadAi}
+                  />
                 }
               />
               <Route path="*" element={<Navigate to="/" replace />} />

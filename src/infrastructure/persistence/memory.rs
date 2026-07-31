@@ -10,7 +10,9 @@ use crate::domain::ai_classify_task::AiClassifyTask;
 use crate::domain::crawl_task::CrawlTask;
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
-use crate::domain::repository::{AiClassifyTaskRepository, CrawlTaskRepository, ItemRepository};
+use crate::domain::repository::{
+    AiClassifyTaskRepository, CrawlTaskRepository, ItemRepository, Page,
+};
 
 #[derive(Default)]
 pub struct InMemoryItemRepository {
@@ -28,12 +30,28 @@ impl ItemRepository for InMemoryItemRepository {
         Ok(())
     }
 
-    async fn list(&self) -> Result<Vec<Item>, DomainError> {
+    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError> {
         let guard = self
             .items
             .lock()
             .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
-        Ok(guard.clone())
+        let mut all = guard.clone();
+        all.sort_by(|a, b| b.crawled_at.cmp(&a.crawled_at));
+        let total = all.len() as u64;
+        let items = all
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect();
+        Ok(Page { items, total })
+    }
+
+    async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError> {
+        let guard = self
+            .items
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        Ok(guard.iter().filter(|i| i.crawled_at >= unix_ts).count() as u64)
     }
 }
 

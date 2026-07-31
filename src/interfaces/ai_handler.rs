@@ -2,15 +2,15 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use std::collections::HashMap;
 
 use crate::application::ai_provider_service::AiProviderPatch;
 
 use super::dto::{
     AiProviderCreateRequest, AiProviderResponse, AiProviderUpdateRequest, AiStatusResponse,
     AiToolCallResponse, ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse,
-    ClassifyTaskResponse, TestConnectionResponse,
+    ClassifyTaskResponse, PageQuery, PageResponse, TestConnectionResponse,
 };
+use super::item_handler::normalize_page;
 use super::AppState;
 
 /// GET /api/ai/providers
@@ -117,17 +117,19 @@ pub async fn ai_status(State(state): State<AppState>) -> Json<ApiResponse<AiStat
     }
 }
 
-/// GET /api/ai/tool-calls?limit=50
+/// GET /api/ai/tool-calls?page=1&page_size=20：工具调用审计，按时间倒序分页
 pub async fn list_tool_calls(
     State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<ApiResponse<Vec<AiToolCallResponse>>> {
-    let limit = params
-        .get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
-    match state.ai_tool_call_service.list_recent(limit).await {
-        Ok(list) => Json(ApiResponse::ok(list.into_iter().map(Into::into).collect())),
+    Query(q): Query<PageQuery>,
+) -> Json<ApiResponse<PageResponse<AiToolCallResponse>>> {
+    let (page, page_size) = normalize_page(q.page, q.page_size);
+    match state.ai_tool_call_service.list_paginated(page, page_size).await {
+        Ok(p) => Json(ApiResponse::ok(PageResponse::new(
+            p.items.into_iter().map(Into::into).collect(),
+            p.total,
+            page,
+            page_size,
+        ))),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

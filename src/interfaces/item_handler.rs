@@ -1,14 +1,29 @@
-use axum::extract::{Json, State};
+use axum::extract::{Json, Query, State};
 
-use super::dto::{ApiResponse, ItemResponse};
+use super::dto::{ApiResponse, ItemResponse, PageQuery, PageResponse};
 use super::AppState;
 
-/// GET /api/items：商品列表（管理端数据源）
+/// 分页参数钳制：page ≥ 1，page_size ∈ [1, 100]，默认 20
+pub(crate) fn normalize_page(page: Option<u64>, page_size: Option<u64>) -> (u64, u64) {
+    (
+        page.unwrap_or(1).max(1),
+        page_size.unwrap_or(20).clamp(1, 100),
+    )
+}
+
+/// GET /api/items?page=1&page_size=20：已抓取原始数据，按抓取时间倒序分页
 pub async fn list_items(
     State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<ItemResponse>>> {
-    match state.item_service.list_items().await {
-        Ok(items) => Json(ApiResponse::ok(items.into_iter().map(Into::into).collect())),
+    Query(q): Query<PageQuery>,
+) -> Json<ApiResponse<PageResponse<ItemResponse>>> {
+    let (page, page_size) = normalize_page(q.page, q.page_size);
+    match state.item_service.list_paginated(page, page_size).await {
+        Ok(p) => Json(ApiResponse::ok(PageResponse::new(
+            p.items.into_iter().map(Into::into).collect(),
+            p.total,
+            page,
+            page_size,
+        ))),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

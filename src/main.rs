@@ -15,6 +15,7 @@ use application::item_service::ItemService;
 use application::ports::XianYuGateway;
 use application::product_service::ProductService;
 use application::queue_service::QueueService;
+use application::stats_service::StatsService;
 use application::tag_service::TagService;
 use infrastructure::config::Config;
 use infrastructure::persistence::memory::{
@@ -92,11 +93,13 @@ async fn main() -> anyhow::Result<()> {
 
     let queue_service = Arc::new(QueueService::new(
         queue_repo,
-        product_repo,
+        product_repo.clone(),
         tag_repo,
         gateway,
-        item_repo,
+        item_repo.clone(),
     ));
+
+    let stats_service = Arc::new(StatsService::new(item_repo, product_repo));
 
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
@@ -112,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
             ai_provider_service,
             ai_tool_call_service,
             classify_service,
+            stats_service,
         },
         &config.static_dir,
     );

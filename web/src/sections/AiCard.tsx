@@ -31,7 +31,8 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '@/lib/api';
-import type { AiProvider, AiStatus, AiToolCall, TestConnectionResponse } from '@/types/api';
+import { Pager } from '@/sections/Pager';
+import type { AiProvider, AiStatus, AiToolCall, PageResponse, TestConnectionResponse } from '@/types/api';
 
 // 供应商模板：后端统一使用 OpenAI 兼容协议。
 // base_url / model 参考 rig-core 0.41 各 provider 常量与官方 OpenAI 兼容端点文档（2026-07）。
@@ -63,11 +64,12 @@ const AI_PRESETS: Record<string, { name: string; base_url: string; model: string
 interface Props {
   providers: AiProvider[];
   status: AiStatus | null;
-  toolCalls: AiToolCall[];
+  toolCalls: PageResponse<AiToolCall>; // 服务端分页的调用记录
+  onCallsPageChange: (page: number, pageSize: number) => void;
   onRefresh: () => void;
 }
 
-export function AiCard({ providers, status, toolCalls, onRefresh }: Props) {
+export function AiCard({ providers, status, toolCalls, onCallsPageChange, onRefresh }: Props) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
@@ -170,7 +172,7 @@ export function AiCard({ providers, status, toolCalls, onRefresh }: Props) {
           <CardTitle>AI</CardTitle>
           <TabsList>
             <TabsTrigger value="providers">接口配置</TabsTrigger>
-            <TabsTrigger value="calls">调用记录（{toolCalls.length}）</TabsTrigger>
+            <TabsTrigger value="calls">调用记录（{toolCalls.total}）</TabsTrigger>
           </TabsList>
         </CardHeader>
         <TabsContent value="providers">
@@ -276,7 +278,7 @@ export function AiCard({ providers, status, toolCalls, onRefresh }: Props) {
           </CardContent>
         </TabsContent>
         <TabsContent value="calls">
-          <CardContent>
+          <CardContent className="space-y-3">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -288,14 +290,14 @@ export function AiCard({ providers, status, toolCalls, onRefresh }: Props) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {toolCalls.length === 0 ? (
+                {toolCalls.items.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground">
                       暂无工具调用记录
                     </TableCell>
                   </TableRow>
                 ) : (
-                  toolCalls.map((c) => (
+                  toolCalls.items.map((c) => (
                     <TableRow key={c.id}>
                       <TableCell className="whitespace-nowrap">{fmtTime(c.created_at)}</TableCell>
                       <TableCell>{c.tool_name}</TableCell>
@@ -312,6 +314,12 @@ export function AiCard({ providers, status, toolCalls, onRefresh }: Props) {
                 )}
               </TableBody>
             </Table>
+            <Pager
+              page={toolCalls.page}
+              pageSize={toolCalls.page_size}
+              total={toolCalls.total}
+              onChange={onCallsPageChange}
+            />
           </CardContent>
         </TabsContent>
       </Tabs>

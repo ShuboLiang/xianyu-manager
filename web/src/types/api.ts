@@ -22,6 +22,14 @@ export interface ApiResponse<T> {
   data: T | null;
 }
 
+// 分页响应包装：同 ApiResponse，泛型不经 ts-rs 导出，手写
+export interface PageResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 // ---------- 直接别名 ----------
 
 export type Item = ItemResponse;
@@ -35,6 +43,10 @@ export type AiToolCall = AiToolCallResponse;
 export type ClassifySuggestion = ClassifySuggestionDto;
 export type ClassifyTask = ClassifyTaskResponse;
 export type ClassifyWarning = ClassifyWarningDto;
+
+// ---------- 全局统计 ----------
+
+export type { StatsResponse } from './generated/StatsResponse';
 
 // ---------- 队列状态收窄为联合类型（Rust 侧是 String） ----------
 

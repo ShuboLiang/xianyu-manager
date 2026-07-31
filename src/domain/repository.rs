@@ -12,10 +12,54 @@ use super::item::Item;
 use super::product::{NewProduct, Product};
 use super::tag::{NewTag, Tag};
 
+/// 分页结果
+#[derive(Debug)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub total: u64,
+}
+
+/// 商品列表可排序列（白名单，杜绝 SQL 注入面）
+#[derive(Debug, Clone, Copy)]
+pub enum ProductSortColumn {
+    MedianPrice,
+    AvgPrice,
+    CrawledCount,
+    LastCrawledAt,
+    RecyclePrice,
+}
+
+impl ProductSortColumn {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "median_price" => Some(Self::MedianPrice),
+            "avg_price" => Some(Self::AvgPrice),
+            "crawled_count" => Some(Self::CrawledCount),
+            "last_crawled_at" => Some(Self::LastCrawledAt),
+            "recycle_price" => Some(Self::RecyclePrice),
+            _ => None,
+        }
+    }
+
+    /// 对应的 SQL 列（只来自上面的白名单，可安全拼入 SQL）
+    pub fn as_sql(&self) -> &'static str {
+        match self {
+            Self::MedianPrice => "p.median_price",
+            Self::AvgPrice => "p.avg_price",
+            Self::CrawledCount => "p.crawled_count",
+            Self::LastCrawledAt => "p.last_crawled_at",
+            Self::RecyclePrice => "p.recycle_price",
+        }
+    }
+}
+
 #[async_trait]
 pub trait ItemRepository: Send + Sync {
     async fn save_all(&self, items: &[Item]) -> Result<(), DomainError>;
-    async fn list(&self) -> Result<Vec<Item>, DomainError>;
+    /// 按抓取时间倒序分页
+    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError>;
+    /// 指定时间戳以来的抓取数量（KPI「24h 抓取」用）
+    async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError>;
 }
 
 #[async_trait]
@@ -43,6 +87,17 @@ pub trait ProductRepository: Send + Sync {
     async fn find(&self, id: i64) -> Result<Option<Product>, DomainError>;
     async fn find_by_name(&self, name: &str) -> Result<Option<Product>, DomainError>;
     async fn list(&self) -> Result<Vec<Product>, DomainError>;
+    /// 商品总数（KPI 用）
+    async fn count(&self) -> Result<u64, DomainError>;
+    /// 全部商品中最近的爬取时间（KPI 用）
+    async fn max_last_crawled_at(&self) -> Result<Option<u64>, DomainError>;
+    /// 分页查询；sort = (列, 是否降序)，空值列永远排在最后
+    async fn list_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+        sort: Option<(ProductSortColumn, bool)>,
+    ) -> Result<Page<Product>, DomainError>;
     /// 使用某个标签的全部商品（用于删除标签前的影响提示）
     async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError>;
     async fn update(&self, product: &Product) -> Result<(), DomainError>;
@@ -94,8 +149,8 @@ pub trait AiProviderRepository: Send + Sync {
 pub trait AiToolCallRepository: Send + Sync {
     /// 落一条工具调用审计记录并返回带 id 的完整实体
     async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError>;
-    /// 最近的调用记录，按时间倒序
-    async fn list_recent(&self, limit: u32) -> Result<Vec<AiToolCall>, DomainError>;
+    /// 按时间倒序分页
+    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<AiToolCall>, DomainError>;
 }
 
 #[async_trait]

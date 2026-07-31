@@ -6,6 +6,7 @@ pub mod dto;
 pub mod item_handler;
 pub mod product_handler;
 pub mod queue_handler;
+pub mod stats_handler;
 pub mod tag_handler;
 
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use crate::application::crawl_service::CrawlService;
 use crate::application::item_service::ItemService;
 use crate::application::product_service::ProductService;
 use crate::application::queue_service::QueueService;
+use crate::application::stats_service::StatsService;
 use crate::application::tag_service::TagService;
 
 use dto::ApiResponse;
@@ -38,6 +40,7 @@ pub struct AppState {
     pub ai_provider_service: Arc<AiProviderService>,
     pub ai_tool_call_service: Arc<AiToolCallService>,
     pub classify_service: Arc<ClassifyService>,
+    pub stats_service: Arc<StatsService>,
 }
 
 /// 组装整个应用的路由：
@@ -46,6 +49,7 @@ pub struct AppState {
 pub fn build_router(state: AppState, static_dir: &str) -> Router {
     let api = Router::new()
         .route("/health", get(health))
+        .route("/stats", get(stats_handler::get_stats))
         .route("/crawl", post(crawl_handler::start_crawl))
         .route("/crawl/{id}", get(crawl_handler::get_task))
         .route("/items", get(item_handler::list_items))
