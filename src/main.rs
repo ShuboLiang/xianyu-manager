@@ -8,6 +8,7 @@ mod interfaces;
 use std::sync::Arc;
 
 use application::ai::classify_service::ClassifyService;
+use application::ai::crawl_agent_service::CrawlAgentService;
 use application::ai_provider_service::AiProviderService;
 use application::ai_tool_call_service::AiToolCallService;
 use application::crawl_service::CrawlService;
@@ -25,6 +26,7 @@ use infrastructure::persistence::sqlite::{
     self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteProductRepository,
     SqliteQueueRepository, SqliteTagRepository,
 };
+use infrastructure::webbridge_client::WebBridgeClient;
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
 use interfaces::AppState;
 
@@ -49,8 +51,12 @@ async fn main() -> anyhow::Result<()> {
     let queue_repo = Arc::new(SqliteQueueRepository::new(pool.clone()));
     let ai_provider_repo = Arc::new(SqliteAiProviderRepository::new(pool.clone()));
     let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool));
-    let gateway: Arc<dyn XianYuGateway> = match config.gateway.as_str() {
-        "http" => Arc::new(HttpXianYuGateway::new(std::env::var("XIANYU_COOKIE").ok())),
+    // GATEWAY=webbridge：真实抓取走 WebBridge 浏览器（同时作为普通网关供 CrawlService 取原始候选）
+    let webbridge = (config.gateway == "webbridge")
+        .then(|| Arc::new(WebBridgeClient::new(&config.webbridge_url)));
+    let gateway: Arc<dyn XianYuGateway> = match (config.gateway.as_str(), webbridge.clone()) {
+        ("webbridge", Some(client)) => client,
+        ("http", _) => Arc::new(HttpXianYuGateway::new(std::env::var("XIANYU_COOKIE").ok())),
         _ => Arc::new(MockXianYuGateway),
     };
 
@@ -88,8 +94,19 @@ async fn main() -> anyhow::Result<()> {
         classify_task_repo,
         product_repo.clone(),
         tag_repo.clone(),
-        ai_gateway,
+        ai_gateway.clone(),
     ));
+
+    // GATEWAY=webbridge 时，队列条目由 AI agent 抓取（搜索 → 筛选 8 条 → 中位数/回收价落库）
+    let crawl_agent = webbridge.map(|client| {
+        Arc::new(CrawlAgentService::new(
+            client,
+            product_repo.clone(),
+            item_repo.clone(),
+            ai_gateway,
+            config.recycle_factor,
+        ))
+    });
 
     let queue_service = Arc::new(QueueService::new(
         queue_repo,
@@ -97,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         tag_repo,
         gateway,
         item_repo.clone(),
+        crawl_agent,
     ));
 
     let stats_service = Arc::new(StatsService::new(item_repo, product_repo));

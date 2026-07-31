@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::application::ai::crawl_agent_service::CrawlAgentService;
 use crate::application::ports::XianYuGateway;
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus, Selector};
 use crate::domain::crawl_task::now_unix;
@@ -50,6 +51,8 @@ pub struct QueueService {
     tags: Arc<dyn TagRepository>,
     gateway: Arc<dyn XianYuGateway>,
     items: Arc<dyn ItemRepository>,
+    /// AI 抓取（WebBridge 真实浏览器 + AI 筛选）；None 时走 gateway 直接抓取（mock 开发路径）
+    crawl_agent: Option<Arc<CrawlAgentService>>,
 }
 
 impl QueueService {
@@ -59,6 +62,7 @@ impl QueueService {
         tags: Arc<dyn TagRepository>,
         gateway: Arc<dyn XianYuGateway>,
         items: Arc<dyn ItemRepository>,
+        crawl_agent: Option<Arc<CrawlAgentService>>,
     ) -> Self {
         Self {
             queues,
@@ -66,6 +70,7 @@ impl QueueService {
             tags,
             gateway,
             items,
+            crawl_agent,
         }
     }
 
@@ -388,6 +393,23 @@ impl QueueService {
             product.id,
             entry.queue_id
         );
+
+        // AI 抓取路径：WebBridge 搜索 → AI 筛选 8 条 → 工具内算中位数/回收价并落库
+        if let Some(agent) = &self.crawl_agent {
+            let outcome = agent
+                .crawl_product(&product)
+                .await
+                .map_err(|e| EntryFailure::Failed(e.to_string()))?;
+            tracing::info!(
+                "商品 {} 抓取完成：{} 条有效，中位数 {:.2}，均价 {:.2}，回收价 {:.2}",
+                product.id,
+                outcome.count,
+                outcome.median_price,
+                outcome.avg_price,
+                outcome.recycle_price
+            );
+            return Ok(());
+        }
 
         let items = self
             .gateway

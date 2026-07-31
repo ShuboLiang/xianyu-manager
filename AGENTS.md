@@ -26,7 +26,9 @@ cd web && npm run dev   # http://127.0.0.1:5173，/api 自动代理到 127.0.0.1
 | `HOST`          | `127.0.0.1`                 | 监听地址                                              |
 | `PORT`          | `3000`                      | 监听端口                                              |
 | `STATIC_DIR`    | `static`                    | 前端静态文件目录                                      |
-| `GATEWAY`       | `mock`                      | `mock`=假数据网关，`http`=真实闲鱼接口（未实现）      |
+| `GATEWAY`       | `mock`                      | `mock`=假数据网关；`webbridge`=真实抓取（WebBridge 浏览器 + AI 筛选）；`http`=真实接口（未实现） |
+| `WEBBRIDGE_URL` | `http://127.0.0.1:10086`    | `GATEWAY=webbridge` 时的 Kimi WebBridge daemon 地址   |
+| `RECYCLE_FACTOR`| `0.9`                       | 回收价系数：回收价 = 中位数 × 系数（0,1]              |
 | `XIANYU_COOKIE` | -                           | `GATEWAY=http` 时的闲鱼登录态 Cookie                  |
 | `DATABASE_PATH` | `data/xianyu.db`            | SQLite 数据库文件路径（目录自动创建）                 |
 | `AI_API_KEY`    | -                           | AI 环境变量兜底密钥（未配置 DB 默认 provider 时生效） |
@@ -58,6 +60,7 @@ src/
 │   ├── queue_service.rs #   抓取队列：选择器解析、入队去重、全局唯一 worker 串行消费
 │   ├── ai_provider_service.rs # AI 供应商配置管理 + 连通性测试
 │   ├── ai_tool_call_service.rs # AI 工具调用审计查询（分页）
+│   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（AI 驱动抓取 + 两个工具）
 │   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
@@ -72,6 +75,7 @@ src/
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
     ├── xianyu_gateway.rs#   XianYuGateway 实现：Mock / Http（真实接口待实现）
+    ├── webbridge_client.rs#  WebBridge 客户端：驱动本机真实浏览器搜闲鱼并提取候选（也实现 XianYuGateway）
     ├── ai_gateway.rs    #   AiGateway 实现：基于 rig-core 的 OpenAI 兼容端点 + 手写 ReAct 工具循环
     └── persistence/
         ├── memory.rs    #   内存仓储：商品、抓取任务（重启即失）
@@ -110,7 +114,8 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + sh
   - **全局唯一 worker**：`QueueService::start_worker` 在 `main.rs` 启动时拉起，串行消费，任意时刻最多一个 running 队列；running 结束/暂停后最早的 waiting 自动顶上。条目间隔 `interval_secs`（睡眠切成 1 秒小片段以便及时响应暂停）。
   - 队列状态机：`waiting → running → paused/done/cancelled`，`paused → waiting`（恢复=重新排队，无差别恢复）；暂停是**优雅暂停**——当前条目跑完才停。全部暂停/全部恢复只是批量状态变更，运行中队列可用 `POST /api/queues/{id}/entries` 追加条目。
   - 历史清理：`DELETE /api/queues/{id}` 只允许删除 done/cancelled 的队列（条目一并删除），活跃队列拒绝并提示先取消。前端默认只展示活跃队列，done/cancelled 收进「历史队列」折叠区，可在展开后单个删除。
-  - 每条抓取成功后调用 `Product::record_crawl_result` 回填统计（中位数/均价/数量/最后爬取时间/回收价格）。真实爬虫未实现，`GATEWAY=mock` 下回收价用均价占位。
+  - 每条抓取成功后调用 `Product::record_crawl_result` 回填统计（中位数/均价/数量/最后爬取时间/回收价格）。`GATEWAY=mock` 下回收价用均价占位；`GATEWAY=webbridge` 走下方 AI 驱动抓取，回收价 = 中位数 × `RECYCLE_FACTOR`（默认 0.9）。
+- **AI 驱动抓取**（`GATEWAY=webbridge`，实现在 `application/ai/crawl_agent_service.rs`）：队列条目由 ReAct agent 处理——AI 调 `xianyu_search`（经 `WebBridgeClient` 驱动本机真实浏览器带登录态搜闲鱼，导航到搜索页 → 等 SPA 渲染 → evaluate JS 提取候选，最多 30 条）→ AI 从候选中挑最多 8 个「描述最匹配、质量最高」的有效商品（剔除配件/求购/不相关/异常价）→ 调 `save_crawl_result` 提交，工具内算中位数/均价/回收价并写库（items + product 统计）。`save_crawl_result` 未被调用则条目记 failed；两次工具调用都落 `ai_tool_calls` 审计表。WebBridge 未启动/未登录/被风控时错误信息会指向浏览器标签组「闲鱼数据抓取」。
 - **AI 基础设施**（详细方案见 `docs/design-ai-module.md`）：
   - `AiGateway`/`AiTool` 端口在 `application/ports.rs`；真实实现 `RigAiGateway` 在 `infrastructure/ai_gateway.rs`，基于 `rig-core` 0.41 的 OpenAI 兼容端点（DeepSeek/千问/Kimi 等通用），手写 ReAct 工具循环。
   - AI 供应商配置入库管理（`ai_providers`）：前端「AI 接口管理」卡片可增删改查、设默认、测试连通性；密钥明文存本地 SQLite，响应掩码显示。优先级：**DB 默认配置 > `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 环境变量兜底**。

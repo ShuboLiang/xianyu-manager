@@ -1,7 +1,8 @@
-//! AI 自动打标签服务：同步路径（≤50 商品）+ 异步任务路径（>50）。
+//! AI 用例：自动打标签（classify_service）与 AI 驱动抓取（crawl_agent_service）。
 //!
-//! 包含两个应用层 AiTool 实现：
-//! - `list_tags`：实时查库返回全部 enabled=true 的标签
-//! - `apply_product_tags`：批量写入标签关联
+//! 包含应用层 AiTool 实现：
+//! - classify_service：`list_tags` / `apply_product_tags`
+//! - crawl_agent_service：`xianyu_search` / `save_crawl_result`
 
 pub mod classify_service;
+pub mod crawl_agent_service;

@@ -7,8 +7,12 @@ pub struct Config {
     pub port: u16,
     /// 前端静态文件目录
     pub static_dir: String,
-    /// 网关实现：`mock` 使用假数据便于开发，`http`=真实闲鱼接口（未实现）
+    /// 网关实现：`mock` 假数据（开发）；`webbridge` 真实抓取（WebBridge 浏览器 + AI 筛选）；`http` 真实接口（未实现）
     pub gateway: String,
+    /// Kimi WebBridge daemon 地址（GATEWAY=webbridge 时使用）
+    pub webbridge_url: String,
+    /// 回收价系数：回收价 = 中位数 × 系数，默认 0.9
+    pub recycle_factor: f64,
     /// SQLite 数据库文件路径
     pub database_path: String,
     /// AI 兜底配置（优先级：数据库默认配置 > 环境变量）
@@ -33,6 +37,13 @@ impl Config {
                 .unwrap_or(3000),
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".into()),
             gateway: std::env::var("GATEWAY").unwrap_or_else(|_| "mock".into()),
+            webbridge_url: std::env::var("WEBBRIDGE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:10086".into()),
+            recycle_factor: std::env::var("RECYCLE_FACTOR")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|f| *f > 0.0 && *f <= 1.0)
+                .unwrap_or(0.9),
             database_path: std::env::var("DATABASE_PATH")
                 .unwrap_or_else(|_| "data/xianyu.db".into()),
             ai_fallback: AiEnvFallback {
