@@ -4,6 +4,7 @@ pub mod crawl_handler;
 pub mod dto;
 pub mod item_handler;
 pub mod product_handler;
+pub mod queue_handler;
 pub mod tag_handler;
 
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use tower_http::trace::TraceLayer;
 use crate::application::crawl_service::CrawlService;
 use crate::application::item_service::ItemService;
 use crate::application::product_service::ProductService;
+use crate::application::queue_service::QueueService;
 use crate::application::tag_service::TagService;
 
 use dto::ApiResponse;
@@ -28,6 +30,7 @@ pub struct AppState {
     pub item_service: Arc<ItemService>,
     pub tag_service: Arc<TagService>,
     pub product_service: Arc<ProductService>,
+    pub queue_service: Arc<QueueService>,
 }
 
 /// 组装整个应用的路由：
@@ -57,6 +60,18 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
                 .put(product_handler::update_product)
                 .delete(product_handler::delete_product),
         )
+        .route("/queues/preview", post(queue_handler::preview))
+        .route(
+            "/queues",
+            get(queue_handler::list_queues).post(queue_handler::enqueue),
+        )
+        .route("/queues/pause-all", post(queue_handler::pause_all))
+        .route("/queues/resume-all", post(queue_handler::resume_all))
+        .route("/queues/{id}", get(queue_handler::get_queue).delete(queue_handler::delete_queue))
+        .route("/queues/{id}/entries", post(queue_handler::append_entries))
+        .route("/queues/{id}/pause", post(queue_handler::pause_queue))
+        .route("/queues/{id}/resume", post(queue_handler::resume_queue))
+        .route("/queues/{id}/cancel", post(queue_handler::cancel_queue))
         .with_state(state);
 
     Router::new()

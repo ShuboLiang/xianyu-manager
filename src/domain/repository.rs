@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 
+use super::crawl_queue::{CrawlEntry, CrawlQueue, QueueStatus};
 use super::crawl_task::CrawlTask;
 use super::error::DomainError;
 use super::item::Item;
@@ -44,4 +45,28 @@ pub trait ProductRepository: Send + Sync {
     async fn update(&self, product: &Product) -> Result<(), DomainError>;
     /// 返回是否真的删除了记录
     async fn delete(&self, id: i64) -> Result<bool, DomainError>;
+}
+
+#[async_trait]
+pub trait QueueRepository: Send + Sync {
+    async fn create_queue(&self, queue: &CrawlQueue) -> Result<CrawlQueue, DomainError>;
+    async fn add_entries(&self, queue_id: i64, product_ids: &[i64]) -> Result<(), DomainError>;
+    async fn find_queue(&self, id: i64) -> Result<Option<CrawlQueue>, DomainError>;
+    async fn list_queues(&self) -> Result<Vec<CrawlQueue>, DomainError>;
+    async fn update_queue(&self, queue: &CrawlQueue) -> Result<(), DomainError>;
+    async fn list_entries(&self, queue_id: i64) -> Result<Vec<CrawlEntry>, DomainError>;
+    async fn next_pending_entry(&self, queue_id: i64) -> Result<Option<CrawlEntry>, DomainError>;
+    async fn update_entry(&self, entry: &CrawlEntry) -> Result<(), DomainError>;
+    /// 未结束队列（waiting/running/paused）中 pending/running 条目的商品 id（全局去重）
+    async fn queued_product_ids(&self) -> Result<Vec<i64>, DomainError>;
+    /// 当前 running 的队列；启动恢复时数据库里可能有多个，取创建最早的
+    async fn current_running_queue(&self) -> Result<Option<CrawlQueue>, DomainError>;
+    /// 创建最早的 waiting 队列（worker 提升用）
+    async fn oldest_waiting_queue(&self) -> Result<Option<CrawlQueue>, DomainError>;
+    /// 按状态筛选队列（全部暂停/恢复用），按创建时间升序
+    async fn list_by_status(&self, statuses: &[QueueStatus]) -> Result<Vec<CrawlQueue>, DomainError>;
+    /// 重启恢复：所有 running 状态的条目重置为 pending
+    async fn reset_running_entries(&self) -> Result<(), DomainError>;
+    /// 删除队列及其全部条目，返回是否真的删除了记录
+    async fn delete_queue(&self, id: i64) -> Result<bool, DomainError>;
 }

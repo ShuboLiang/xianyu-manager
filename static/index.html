@@ -37,12 +37,79 @@
         </section>
 
         <section class="card">
+            <div class="card-head">
+                <h2>抓取队列</h2>
+                <div class="head-actions">
+                    <button id="pauseAllBtn" class="btn-secondary">全部暂停</button>
+                    <button id="resumeAllBtn">全部恢复</button>
+                </div>
+            </div>
+            <div id="appendBanner" class="append-banner" hidden>
+                正在向队列 #<span id="appendQueueId"></span> 追加条目
+                <a href="#" onclick="exitAppendMode(); return false;">退出追加</a>
+            </div>
+            <div class="selector-grid">
+                <div>
+                    <h3>全部包含（AND）</h3>
+                    <div id="selAll" class="tag-checkboxes"><span class="muted">暂无标签</span></div>
+                </div>
+                <div>
+                    <h3>任一包含（OR）</h3>
+                    <div id="selAny" class="tag-checkboxes"><span class="muted">暂无标签</span></div>
+                </div>
+                <div>
+                    <h3>排除（NOT）</h3>
+                    <div id="selExclude" class="tag-checkboxes"><span class="muted">暂无标签</span></div>
+                </div>
+            </div>
+            <div class="form-row">
+                <input id="staleDays" type="number" min="1" placeholder="N 天未爬（可选）" title="最后爬取时间距今 ≥ N 天">
+                <input id="intervalSecs" type="number" min="1" value="3" title="条间间隔（秒）" style="width: 90px">
+                <button id="previewBtn" class="btn-secondary">预览</button>
+                <button id="enqueueBtn">加入队列</button>
+            </div>
+            <div id="previewResult" class="preview-result" hidden></div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>间隔</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="queueTable">
+                    <tr><td colspan="6" class="empty">暂无队列</td></tr>
+                </tbody>
+            </table>
+            <div id="historyToggle" class="history-toggle" hidden>
+                <a href="#" onclick="toggleHistory(); return false;"><span id="historyArrow">▸</span> 历史队列（<span id="historyCount">0</span>）</a>
+            </div>
+            <table id="historyTableWrap" hidden>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>间隔</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="historyTable"></tbody>
+            </table>
+        </section>
+
+        <section class="card">
             <h2>待爬取商品管理</h2>
             <div class="form-row">
                 <input id="productName" type="text" placeholder="商品名，如：佳能 5D4 机身">
                 <input id="productRemark" type="text" placeholder="备注（可选）">
                 <button id="productSubmitBtn">添加商品</button>
                 <button id="productCancelBtn" class="btn-secondary" hidden>取消编辑</button>
+                <button id="crawlSelectedBtn" class="btn-secondary">选中加入队列</button>
             </div>
             <div id="productTagList" class="tag-checkboxes">
                 <span class="muted">暂无标签可勾选</span>
@@ -50,6 +117,7 @@
             <table>
                 <thead>
                     <tr>
+                        <th></th>
                         <th>商品名</th>
                         <th>标签</th>
                         <th>中位数</th>
@@ -62,22 +130,13 @@
                     </tr>
                 </thead>
                 <tbody id="productTable">
-                    <tr><td colspan="9" class="empty">暂无商品</td></tr>
+                    <tr><td colspan="10" class="empty">暂无商品</td></tr>
                 </tbody>
             </table>
         </section>
 
         <section class="card">
-            <h2>发起抓取</h2>
-            <div class="form-row">
-                <input id="keyword" type="text" placeholder="搜索关键词，如：MacBook Pro">
-                <input id="maxPages" type="number" value="1" min="1" max="50" title="抓取页数">
-                <button id="crawlBtn">开始抓取</button>
-            </div>
-        </section>
-
-        <section class="card">
-            <h2>商品列表</h2>
+            <h2>商品列表（已抓取的原始数据）</h2>
             <button id="refreshBtn">刷新列表</button>
             <table>
                 <thead>

@@ -11,10 +11,13 @@ use application::crawl_service::CrawlService;
 use application::item_service::ItemService;
 use application::ports::XianYuGateway;
 use application::product_service::ProductService;
+use application::queue_service::QueueService;
 use application::tag_service::TagService;
 use infrastructure::config::Config;
 use infrastructure::persistence::memory::{InMemoryCrawlTaskRepository, InMemoryItemRepository};
-use infrastructure::persistence::sqlite::{self, SqliteProductRepository, SqliteTagRepository};
+use infrastructure::persistence::sqlite::{
+    self, SqliteProductRepository, SqliteQueueRepository, SqliteTagRepository,
+};
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
 use interfaces::AppState;
 
@@ -35,17 +38,28 @@ async fn main() -> anyhow::Result<()> {
     let task_repo = Arc::new(InMemoryCrawlTaskRepository::default());
     let pool = sqlite::connect(&config.database_path).await?;
     let tag_repo = Arc::new(SqliteTagRepository::new(pool.clone()));
-    let product_repo = Arc::new(SqliteProductRepository::new(pool));
+    let product_repo = Arc::new(SqliteProductRepository::new(pool.clone()));
+    let queue_repo = Arc::new(SqliteQueueRepository::new(pool));
     let gateway: Arc<dyn XianYuGateway> = match config.gateway.as_str() {
         "http" => Arc::new(HttpXianYuGateway::new(std::env::var("XIANYU_COOKIE").ok())),
         _ => Arc::new(MockXianYuGateway),
     };
 
     // application：用例服务
-    let crawl_service = Arc::new(CrawlService::new(gateway, item_repo.clone(), task_repo));
-    let item_service = Arc::new(ItemService::new(item_repo));
+    let crawl_service = Arc::new(CrawlService::new(gateway.clone(), item_repo.clone(), task_repo));
+    let item_service = Arc::new(ItemService::new(item_repo.clone()));
     let tag_service = Arc::new(TagService::new(tag_repo.clone()));
-    let product_service = Arc::new(ProductService::new(product_repo, tag_repo));
+    let product_service = Arc::new(ProductService::new(product_repo.clone(), tag_repo.clone()));
+    let queue_service = Arc::new(QueueService::new(
+        queue_repo,
+        product_repo,
+        tag_repo,
+        gateway,
+        item_repo,
+    ));
+
+    // 启动恢复 + 拉起全局抓取 worker
+    queue_service.start_worker().await?;
 
     // interfaces：HTTP 路由
     let app = interfaces::build_router(
@@ -54,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
             item_service,
             tag_service,
             product_service,
+            queue_service,
         },
         &config.static_dir,
     );

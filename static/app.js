@@ -2,9 +2,13 @@ const statusEl = document.getElementById('status');
 const tableEl = document.getElementById('itemTable');
 const tagTableEl = document.getElementById('tagTable');
 const productTableEl = document.getElementById('productTable');
+const queueTableEl = document.getElementById('queueTable');
+const historyTableEl = document.getElementById('historyTable');
 let editingTagId = null;
 let editingProductId = null;
 let cachedTags = [];
+let appendTargetQueueId = null;   // 追加模式：目标队列 id
+let queueWasActive = false;        // 上轮轮询是否有活跃队列
 
 async function checkHealth() {
     try {
@@ -44,45 +48,6 @@ async function loadItems() {
     renderItems(body.data);
 }
 
-async function startCrawl() {
-    const keyword = document.getElementById('keyword').value.trim();
-    const maxPages = Number(document.getElementById('maxPages').value) || 1;
-    if (!keyword) {
-        alert('请输入关键词');
-        return;
-    }
-    const res = await fetch('/api/crawl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyword, max_pages: maxPages }),
-    });
-    const body = await res.json();
-    if (body.code !== 0) {
-        alert('创建任务失败: ' + body.message);
-        return;
-    }
-    pollTask(body.data.id);
-}
-
-// 轮询任务状态直到 done / failed，然后刷新列表
-async function pollTask(taskId) {
-    const res = await fetch(`/api/crawl/${taskId}`);
-    const body = await res.json();
-    if (body.code !== 0) {
-        alert('查询任务失败: ' + body.message);
-        return;
-    }
-    const task = body.data;
-    if (task.status === 'done') {
-        loadItems();
-    } else if (task.status === 'failed') {
-        alert('抓取失败: ' + (task.error || '未知错误'));
-    } else {
-        setTimeout(() => pollTask(taskId), 500);
-    }
-}
-
-document.getElementById('crawlBtn').addEventListener('click', startCrawl);
 document.getElementById('refreshBtn').addEventListener('click', loadItems);
 
 // ---------- 标签管理 ----------
@@ -112,6 +77,25 @@ async function loadTags() {
     cachedTags = body.data || [];
     renderTags(cachedTags);
     renderTagOptions();
+    renderSelectorGroups();
+}
+
+// 队列选择器的三组标签勾选（AND / OR / NOT）
+function renderSelectorGroups() {
+    for (const id of ['selAll', 'selAny', 'selExclude']) {
+        const box = document.getElementById(id);
+        const checked = new Set([...box.querySelectorAll('input:checked')].map(i => i.value));
+        if (cachedTags.length === 0) {
+            box.innerHTML = '<span class="muted">暂无标签</span>';
+            continue;
+        }
+        box.innerHTML = cachedTags.map(t => `
+            <label class="tag-check">
+                <input type="checkbox" value="${t.id}" ${checked.has(String(t.id)) ? 'checked' : ''}>
+                ${t.name}
+            </label>
+        `).join('');
+    }
 }
 
 function renderTagOptions() {
@@ -237,11 +221,12 @@ function fmtTime(unix) {
 
 function renderProducts(products) {
     if (!products || products.length === 0) {
-        productTableEl.innerHTML = '<tr><td colspan="9" class="empty">暂无商品</td></tr>';
+        productTableEl.innerHTML = '<tr><td colspan="10" class="empty">暂无商品</td></tr>';
         return;
     }
     productTableEl.innerHTML = products.map(p => `
         <tr>
+            <td><input type="checkbox" class="prod-check" value="${p.id}"></td>
             <td>${p.name}</td>
             <td>${p.tag_names.length ? p.tag_names.join('、') : '<span class="muted">无标签</span>'}</td>
             <td>${fmtPrice(p.median_price)}</td>
@@ -251,6 +236,7 @@ function renderProducts(products) {
             <td>${fmtPrice(p.recycle_price)}</td>
             <td>${p.remark || '-'}</td>
             <td>
+                <a href="#" onclick="crawlProduct(${p.id}); return false;">抓取</a>
                 <a href="#" onclick="editProduct(${p.id}); return false;">编辑</a>
                 <a href="#" onclick="deleteProduct(${p.id}); return false;">删除</a>
             </td>
@@ -325,6 +311,268 @@ function resetProductForm() {
 document.getElementById('productSubmitBtn').addEventListener('click', submitProduct);
 document.getElementById('productCancelBtn').addEventListener('click', resetProductForm);
 
+// ---------- 抓取队列 ----------
+
+function checkedIds(containerId) {
+    return [...document.querySelectorAll(`#${containerId} input:checked`)]
+        .map(i => Number(i.value));
+}
+
+function collectSelector() {
+    const stale = document.getElementById('staleDays').value;
+    return {
+        tag_all: checkedIds('selAll'),
+        tag_any: checkedIds('selAny'),
+        tag_exclude: checkedIds('selExclude'),
+        stale_days: stale ? Number(stale) : null,
+    };
+}
+
+function selectorIsEmpty(sel) {
+    return sel.tag_all.length === 0 && sel.tag_any.length === 0
+        && sel.tag_exclude.length === 0 && sel.stale_days === null;
+}
+
+async function previewSelector() {
+    const selector = collectSelector();
+    if (selectorIsEmpty(selector)) {
+        alert('请至少选择一个标签条件或填写天数');
+        return;
+    }
+    const res = await fetch('/api/queues/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selector }),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('预览失败: ' + body.message);
+        return;
+    }
+    const { to_add, skipped } = body.data;
+    const box = document.getElementById('previewResult');
+    box.hidden = false;
+    box.innerHTML = `将新增 <b>${to_add.length}</b> 个${to_add.length ? '：' + to_add.map(p => p.name).join('、') : ''}` +
+        (skipped.length ? `<br>已在队列，跳过 <b>${skipped.length}</b> 个：${skipped.map(p => p.name).join('、')}` : '');
+}
+
+async function enqueueBySelector() {
+    const selector = collectSelector();
+    if (selectorIsEmpty(selector)) {
+        alert('请至少选择一个标签条件或填写天数');
+        return;
+    }
+    const interval = Number(document.getElementById('intervalSecs').value) || 3;
+    const isAppend = appendTargetQueueId !== null;
+    const url = isAppend ? `/api/queues/${appendTargetQueueId}/entries` : '/api/queues';
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selector, interval_secs: interval }),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert((isAppend ? '追加' : '入队') + '失败: ' + body.message);
+        return;
+    }
+    reportEnqueue(body.data, isAppend);
+}
+
+function reportEnqueue(data, isAppend) {
+    let msg = `${isAppend ? '追加' : '入队'}成功：新增 ${data.added.length} 个`;
+    if (data.skipped.length) msg += `，跳过 ${data.skipped.length} 个（已在队列）`;
+    if (!isAppend && data.status === 'waiting') msg += '\n已有队列在执行，本队列进入排队，将自动开始';
+    alert(msg);
+    document.getElementById('previewResult').hidden = true;
+    if (isAppend) exitAppendMode();
+    loadQueues();
+}
+
+async function crawlSelected() {
+    const ids = [...document.querySelectorAll('.prod-check:checked')].map(i => Number(i.value));
+    if (ids.length === 0) {
+        alert('请先勾选商品');
+        return;
+    }
+    const isAppend = appendTargetQueueId !== null;
+    const interval = Number(document.getElementById('intervalSecs').value) || 3;
+    const url = isAppend ? `/api/queues/${appendTargetQueueId}/entries` : '/api/queues';
+    if (!confirm(`将 ${ids.length} 个商品${isAppend ? `追加到队列 #${appendTargetQueueId}` : '加入新队列'}？`)) return;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_ids: ids, interval_secs: interval }),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('入队失败: ' + body.message);
+        return;
+    }
+    document.querySelectorAll('.prod-check:checked').forEach(i => i.checked = false);
+    reportEnqueue(body.data, isAppend);
+}
+
+async function crawlProduct(id) {
+    const interval = Number(document.getElementById('intervalSecs').value) || 3;
+    const isAppend = appendTargetQueueId !== null;
+    const url = isAppend ? `/api/queues/${appendTargetQueueId}/entries` : '/api/queues';
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_ids: [id], interval_secs: interval }),
+    });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('入队失败: ' + body.message);
+        return;
+    }
+    reportEnqueue(body.data, isAppend);
+}
+
+const QUEUE_STATUS_TEXT = {
+    waiting: '排队中', running: '执行中', paused: '已暂停', done: '已完成', cancelled: '已取消',
+};
+
+function queueActions(q) {
+    const links = [];
+    if (q.status === 'running') {
+        links.push(`<a href="#" onclick="pauseQueue(${q.id}); return false;">暂停</a>`);
+    }
+    if (q.status === 'paused') {
+        links.push(`<a href="#" onclick="resumeQueue(${q.id}); return false;">恢复</a>`);
+    }
+    if (['waiting', 'running', 'paused'].includes(q.status)) {
+        links.push(`<a href="#" onclick="appendQueue(${q.id}); return false;">追加</a>`);
+        links.push(`<a href="#" onclick="cancelQueue(${q.id}); return false;">取消</a>`);
+    }
+    return links.join(' ') || '<span class="muted">-</span>';
+}
+
+function queueRow(q, actions) {
+    return `
+        <tr>
+            <td>#${q.id}</td>
+            <td><span class="badge badge-${q.status}">${QUEUE_STATUS_TEXT[q.status] || q.status}</span></td>
+            <td title="待 ${q.pending} / 成 ${q.done} / 败 ${q.failed} / 跳 ${q.skipped}">${q.done + q.failed + q.skipped}/${q.total}</td>
+            <td>${q.interval_secs}s</td>
+            <td>${fmtTime(q.created_at)}</td>
+            <td>${actions}</td>
+        </tr>
+    `;
+}
+
+async function loadQueues() {
+    const res = await fetch('/api/queues');
+    const body = await res.json();
+    const queues = body.data || [];
+    const active = queues.filter(q => ['waiting', 'running', 'paused'].includes(q.status));
+    const history = queues.filter(q => !['waiting', 'running', 'paused'].includes(q.status));
+
+    if (active.length === 0) {
+        queueTableEl.innerHTML = '<tr><td colspan="6" class="empty">暂无活跃队列</td></tr>';
+    } else {
+        queueTableEl.innerHTML = active.map(q => queueRow(q, queueActions(q))).join('');
+    }
+
+    const toggle = document.getElementById('historyToggle');
+    document.getElementById('historyCount').textContent = history.length;
+    toggle.hidden = history.length === 0;
+    if (history.length === 0) {
+        document.getElementById('historyTableWrap').hidden = true;
+        document.getElementById('historyArrow').textContent = '▸';
+    }
+    historyTableEl.innerHTML = history.map(q =>
+        queueRow(q, `<a href="#" onclick="deleteQueue(${q.id}); return false;">删除</a>`)
+    ).join('');
+
+    const running = active.some(q => ['waiting', 'running'].includes(q.status));
+    if (running) {
+        queueWasActive = true;
+        setTimeout(loadQueues, 2000);
+    } else if (queueWasActive) {
+        // 刚全部结束：最后刷新一次商品统计和原始数据
+        queueWasActive = false;
+        loadProducts();
+        loadItems();
+    }
+}
+
+function toggleHistory() {
+    const wrap = document.getElementById('historyTableWrap');
+    wrap.hidden = !wrap.hidden;
+    document.getElementById('historyArrow').textContent = wrap.hidden ? '▸' : '▾';
+}
+
+async function deleteQueue(id) {
+    if (!confirm(`确定删除队列 #${id}？队列及其条目记录将被永久删除。`)) return;
+    const res = await fetch(`/api/queues/${id}`, { method: 'DELETE' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('删除失败: ' + body.message);
+    }
+    loadQueues();
+}
+
+async function pauseQueue(id) { await queueOp(`/api/queues/${id}/pause`); }
+async function resumeQueue(id) { await queueOp(`/api/queues/${id}/resume`); }
+
+async function cancelQueue(id) {
+    if (!confirm('确定取消该队列？剩余条目将不再执行（记录保留）。')) return;
+    await queueOp(`/api/queues/${id}/cancel`);
+}
+
+async function queueOp(url) {
+    const res = await fetch(url, { method: 'POST' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('操作失败: ' + body.message);
+    }
+    loadQueues();
+}
+
+function appendQueue(id) {
+    appendTargetQueueId = id;
+    document.getElementById('appendQueueId').textContent = id;
+    document.getElementById('appendBanner').hidden = false;
+    document.getElementById('enqueueBtn').textContent = `追加到队列 #${id}`;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function exitAppendMode() {
+    appendTargetQueueId = null;
+    document.getElementById('appendBanner').hidden = true;
+    document.getElementById('enqueueBtn').textContent = '加入队列';
+}
+
+async function pauseAll() {
+    const res = await fetch('/api/queues/pause-all', { method: 'POST' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('操作失败: ' + body.message);
+        return;
+    }
+    alert(`已暂停 ${body.data} 个队列`);
+    loadQueues();
+}
+
+async function resumeAll() {
+    const res = await fetch('/api/queues/resume-all', { method: 'POST' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('操作失败: ' + body.message);
+        return;
+    }
+    alert(`已恢复 ${body.data} 个队列`);
+    loadQueues();
+}
+
+document.getElementById('previewBtn').addEventListener('click', previewSelector);
+document.getElementById('enqueueBtn').addEventListener('click', enqueueBySelector);
+document.getElementById('crawlSelectedBtn').addEventListener('click', crawlSelected);
+document.getElementById('pauseAllBtn').addEventListener('click', pauseAll);
+document.getElementById('resumeAllBtn').addEventListener('click', resumeAll);
+
 checkHealth();
 loadTags().then(loadProducts);
 loadItems();
+loadQueues();

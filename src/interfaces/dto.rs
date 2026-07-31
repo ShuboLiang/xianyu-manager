@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::application::queue_service::QueueProgress;
+use crate::domain::crawl_queue::Selector;
 use crate::domain::crawl_task::{CrawlTask, TaskStatus};
 use crate::domain::item::Item;
 use crate::domain::product::Product;
@@ -169,6 +171,93 @@ impl ProductResponse {
 pub struct ProductBriefResponse {
     pub id: i64,
     pub name: String,
+}
+
+// ---------- 抓取队列 ----------
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SelectorDto {
+    #[serde(default)]
+    pub tag_all: Vec<i64>,
+    #[serde(default)]
+    pub tag_any: Vec<i64>,
+    #[serde(default)]
+    pub tag_exclude: Vec<i64>,
+    pub stale_days: Option<u32>,
+}
+
+impl From<SelectorDto> for Selector {
+    fn from(d: SelectorDto) -> Self {
+        Self {
+            tag_all: d.tag_all,
+            tag_any: d.tag_any,
+            tag_exclude: d.tag_exclude,
+            stale_days: d.stale_days,
+        }
+    }
+}
+
+/// 预览请求：选择器或商品 id 列表，二选一
+#[derive(Debug, Deserialize)]
+pub struct PreviewRequest {
+    pub selector: Option<SelectorDto>,
+    pub product_ids: Option<Vec<i64>>,
+}
+
+/// 入队/追加请求：目标 + 间隔（追加时间隔忽略）
+#[derive(Debug, Deserialize)]
+pub struct EnqueueRequest {
+    pub selector: Option<SelectorDto>,
+    pub product_ids: Option<Vec<i64>>,
+    pub interval_secs: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreviewResponse {
+    pub to_add: Vec<ProductBriefResponse>,
+    pub skipped: Vec<ProductBriefResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QueueResponse {
+    pub id: i64,
+    pub status: String,
+    pub interval_secs: u32,
+    pub created_at: u64,
+    pub finished_at: Option<u64>,
+    pub total: usize,
+    pub pending: usize,
+    pub running: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub skipped: usize,
+}
+
+impl From<QueueProgress> for QueueResponse {
+    fn from(p: QueueProgress) -> Self {
+        Self {
+            id: p.queue.id,
+            status: p.queue.status.as_str().to_string(),
+            interval_secs: p.queue.interval_secs,
+            created_at: p.queue.created_at,
+            finished_at: p.queue.finished_at,
+            total: p.total,
+            pending: p.pending,
+            running: p.running,
+            done: p.done,
+            failed: p.failed,
+            skipped: p.skipped,
+        }
+    }
+}
+
+/// 入队/追加响应：队列 + 明细
+#[derive(Debug, Serialize)]
+pub struct EnqueueResponse {
+    pub queue_id: i64,
+    pub status: String,
+    pub added: Vec<ProductBriefResponse>,
+    pub skipped: Vec<ProductBriefResponse>,
 }
 
 /// 统一 API 响应结构
