@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>闲鱼爬虫管理台</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header>
+        <h1>闲鱼爬虫管理台</h1>
+        <span id="status" class="status">检测服务中…</span>
+    </header>
+
+    <main>
+        <section class="card">
+            <h2>发起抓取</h2>
+            <div class="form-row">
+                <input id="keyword" type="text" placeholder="搜索关键词，如：MacBook Pro">
+                <input id="maxPages" type="number" value="1" min="1" max="50" title="抓取页数">
+                <button id="crawlBtn">开始抓取</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>商品列表</h2>
+            <button id="refreshBtn">刷新列表</button>
+            <table>
+                <thead>
+                    <tr>
+                        <th>标题</th>
+                        <th>价格</th>
+                        <th>卖家</th>
+                        <th>抓取时间</th>
+                        <th>链接</th>
+                    </tr>
+                </thead>
+                <tbody id="itemTable">
+                    <tr><td colspan="5" class="empty">暂无数据</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+</html>
