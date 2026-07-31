@@ -53,6 +53,7 @@ impl XianYuGateway for MockXianYuGateway {
                     seller: format!("卖家{n}"),
                     url: format!("https://www.goofish.com/item?id=mock-{n}"),
                     crawled_at: now,
+                    product_id: None,
                 }
             })
             .collect();

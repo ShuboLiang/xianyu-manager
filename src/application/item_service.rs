@@ -21,4 +21,9 @@ impl ItemService {
             .list_paginated((page - 1) * page_size, page_size)
             .await
     }
+
+    /// 某商品最后一轮抓取的明细（前端「查看明细」弹窗用）
+    pub async fn latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError> {
+        self.items.list_latest_for_product(product_id).await
+    }
 }

@@ -171,12 +171,29 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             price      REAL NOT NULL,
             seller     TEXT NOT NULL DEFAULT '',
             url        TEXT NOT NULL,
-            crawled_at INTEGER NOT NULL
+            crawled_at INTEGER NOT NULL,
+            product_id INTEGER
         )",
     )
     .execute(&*pool)
     .await
     .map_err(to_infra)?;
+
+    // 老库 items 表可能缺 product_id 列（CREATE TABLE IF NOT EXISTS 不会补列），手动迁移
+    let cols = sqlx::query("PRAGMA table_info(items)")
+        .fetch_all(&*pool)
+        .await
+        .map_err(to_infra)?;
+    let has_product_id = cols
+        .iter()
+        .any(|r| r.get::<String, _>("name") == "product_id");
+    if !has_product_id {
+        sqlx::query("ALTER TABLE items ADD COLUMN product_id INTEGER")
+            .execute(&*pool)
+            .await
+            .map_err(to_infra)?;
+        tracing::info!("items 表迁移：补充 product_id 列");
+    }
 
     Ok(())
 }
@@ -937,8 +954,8 @@ impl ItemRepository for SqliteItemRepository {
     async fn save_all(&self, items: &[Item]) -> Result<(), DomainError> {
         for item in items {
             sqlx::query(
-                "INSERT OR REPLACE INTO items (id, title, price, seller, url, crawled_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO items (id, title, price, seller, url, crawled_at, product_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&item.id)
             .bind(&item.title)
@@ -946,6 +963,7 @@ impl ItemRepository for SqliteItemRepository {
             .bind(&item.seller)
             .bind(&item.url)
             .bind(item.crawled_at as i64)
+            .bind(item.product_id)
             .execute(&self.pool)
             .await
             .map_err(to_infra)?;
@@ -981,6 +999,22 @@ impl ItemRepository for SqliteItemRepository {
             .map_err(to_infra)?;
         Ok(row.get::<i64, _>("c") as u64)
     }
+
+    async fn list_latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError> {
+        // 同一轮抓取的条目共享 crawled_at：取该商品最新一轮的全部明细，按价格升序
+        let rows = sqlx::query(
+            "SELECT * FROM items
+             WHERE product_id = ?
+               AND crawled_at = (SELECT MAX(crawled_at) FROM items WHERE product_id = ?)
+             ORDER BY price ASC, id ASC",
+        )
+        .bind(product_id)
+        .bind(product_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(rows.iter().map(row_to_item).collect())
+    }
 }
 
 fn row_to_item(row: &SqliteRow) -> Item {
@@ -991,6 +1025,7 @@ fn row_to_item(row: &SqliteRow) -> Item {
         seller: row.get("seller"),
         url: row.get("url"),
         crawled_at: row.get::<i64, _>("crawled_at") as u64,
+        product_id: row.get("product_id"),
     }
 }
 
@@ -1007,6 +1042,7 @@ mod item_repo_tests {
             seller: "卖家".into(),
             url: format!("https://www.goofish.com/item?id={id}"),
             crawled_at,
+            product_id: None,
         }
     }
 
@@ -1035,5 +1071,38 @@ mod item_repo_tests {
 
         assert_eq!(repo.count_since(now - 5).await.unwrap(), 2);
         assert_eq!(repo.count_since(now + 5).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_latest_for_product_returns_only_latest_round() {
+        let pool = connect(":memory:").await.unwrap();
+        let repo = SqliteItemRepository::new(pool);
+        let now = now_unix();
+
+        // 商品 1 的两轮抓取 + 商品 2 的一轮
+        let mut round1 = vec![sample("r1-a", 100.0, now - 100), sample("r1-b", 200.0, now - 100)];
+        let mut round2 = vec![
+            sample("r2-a", 300.0, now),
+            sample("r2-b", 250.0, now),
+            sample("r2-c", 280.0, now),
+        ];
+        let mut other = vec![sample("o-a", 999.0, now)];
+        for (i, pid) in [(&mut round1, 1), (&mut round2, 1), (&mut other, 2)] {
+            for it in i.iter_mut() {
+                it.product_id = Some(pid);
+            }
+        }
+        repo.save_all(&round1).await.unwrap();
+        repo.save_all(&round2).await.unwrap();
+        repo.save_all(&other).await.unwrap();
+
+        let latest = repo.list_latest_for_product(1).await.unwrap();
+        assert_eq!(latest.len(), 3);
+        assert!(latest.iter().all(|i| i.crawled_at == now));
+        // 按价格升序
+        assert_eq!(latest[0].id, "r2-b");
+        assert_eq!(latest[2].id, "r2-a");
+
+        assert!(repo.list_latest_for_product(999).await.unwrap().is_empty());
     }
 }

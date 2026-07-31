@@ -94,6 +94,23 @@ pub async fn update_product(
     }
 }
 
+/// GET /api/products/{id}/latest-items：该商品最后一轮抓取的明细（「查看明细」弹窗用）
+pub async fn latest_product_items(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<Vec<super::dto::ItemResponse>>> {
+    // 商品不存在 → 404 语义；存在但还没抓过 → 空数组
+    if let Err(e) = state.product_service.get_product(id).await {
+        return Json(ApiResponse::err(e.to_string()));
+    }
+    match state.item_service.latest_for_product(id).await {
+        Ok(items) => Json(ApiResponse::ok(
+            items.into_iter().map(super::dto::ItemResponse::from).collect(),
+        )),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
 /// DELETE /api/products/{id}：删除商品
 pub async fn delete_product(
     State(state): State<AppState>,

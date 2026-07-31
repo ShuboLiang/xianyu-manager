@@ -44,6 +44,7 @@ import { SkeletonRows } from '@/sections/SkeletonRows';
 import type {
   ClassifyProductsResponse,
   ClassifyTask,
+  Item,
   Product,
   ProductBatchCreateResponse,
   Tag,
@@ -91,6 +92,21 @@ export function ProductsCard({
   const [formTagIds, setFormTagIds] = useState<Set<number>>(new Set());
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+
+  // 抓取明细弹窗：detailProduct 非空即打开；detailItems=null 表示加载中
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+  const [detailItems, setDetailItems] = useState<Item[] | null>(null);
+
+  const openDetail = async (p: Product) => {
+    setDetailProduct(p);
+    setDetailItems(null);
+    try {
+      setDetailItems(await apiGet<Item[]>(`/api/products/${p.id}/latest-items`));
+    } catch (e) {
+      toast.error(`加载抓取明细失败: ${(e as Error).message}`);
+      setDetailProduct(null);
+    }
+  };
 
   const SortHead = ({ label, k }: { label: string; k: SortKey }) => (
     <TableHead>
@@ -453,6 +469,9 @@ export function ProductsCard({
                     <button className="text-primary hover:underline" onClick={() => crawlOne(p.id)}>
                       抓取
                     </button>
+                    <button className="text-primary hover:underline" onClick={() => openDetail(p)}>
+                      明细
+                    </button>
                     <button className="text-primary hover:underline" onClick={() => startEdit(p.id)}>
                       编辑
                     </button>
@@ -514,6 +533,55 @@ export function ProductsCard({
                 关闭
               </Button>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={detailProduct !== null} onOpenChange={(o) => !o && setDetailProduct(null)}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>
+                「{detailProduct?.name}」最新一轮抓取明细
+                {detailItems && <span className="ml-2 text-sm font-normal text-muted-foreground">共 {detailItems.length} 条</span>}
+              </DialogTitle>
+            </DialogHeader>
+            {detailItems === null ? (
+              <Table>
+                <TableBody>
+                  <SkeletonRows cols={4} rows={4} />
+                </TableBody>
+              </Table>
+            ) : detailItems.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                暂无抓取明细——该商品还没有完成过一轮抓取，点「抓取」开始。
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>标题</TableHead>
+                    <TableHead className="w-24">价格</TableHead>
+                    <TableHead className="w-28">卖家</TableHead>
+                    <TableHead className="w-14">链接</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detailItems.map((it) => (
+                    <TableRow key={it.id}>
+                      <TableCell className="max-w-md">
+                        <span className="line-clamp-2">{it.title}</span>
+                      </TableCell>
+                      <TableCell className="font-data">¥{it.price}</TableCell>
+                      <TableCell>{it.seller || '-'}</TableCell>
+                      <TableCell>
+                        <a className="text-primary hover:underline" href={it.url} target="_blank" rel="noreferrer">
+                          查看
+                        </a>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </DialogContent>
         </Dialog>
 

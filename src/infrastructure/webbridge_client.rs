@@ -165,6 +165,7 @@ fn parse_listings(raw: &str) -> Vec<Item> {
                 seller,
                 url,
                 crawled_at: now,
+                product_id: None,
             })
         })
         .collect()

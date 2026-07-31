@@ -411,12 +411,15 @@ impl QueueService {
             return Ok(());
         }
 
-        let items = self
+        let mut items = self
             .gateway
             .search(product.name.as_str(), 1)
             .await
             .map_err(|e| EntryFailure::Failed(e.to_string()))?;
 
+        for it in &mut items {
+            it.product_id = Some(product.id);
+        }
         let _ = self.items.save_all(&items).await;
 
         let mut prices: Vec<f64> = items.iter().map(|i| i.price).collect();

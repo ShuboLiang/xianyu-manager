@@ -47,7 +47,7 @@ src/
 │   ├── crawl_handler.rs #   POST /api/crawl、GET /api/crawl/{id}
 │   ├── item_handler.rs  #   GET /api/items（分页；normalize_page 钳制页码，供各 handler 复用）
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
-│   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}
+│   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
 │   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）
 │   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）

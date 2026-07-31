@@ -54,6 +54,8 @@ pub struct Item {
     pub price: f64,
     pub seller: String,
     pub url: String,
-    /// 抓取时间，Unix 秒
+    /// 抓取时间，Unix 秒（同一轮抓取的条目共享同一时间戳，可作为批次标识）
     pub crawled_at: u64,
+    /// 本次抓取服务的待爬取商品 id（队列/AI 抓取路径写入；关键词直搜等无归属场景为 None）
+    pub product_id: Option<i64>,
 }

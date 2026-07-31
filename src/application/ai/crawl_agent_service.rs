@@ -264,6 +264,7 @@ impl AiTool for SaveCrawlResultTool {
                 seller,
                 url: url.to_string(),
                 crawled_at: now,
+                product_id: Some(self.product_id),
             });
         }
 

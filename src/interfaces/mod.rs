@@ -72,6 +72,10 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
                 .put(product_handler::update_product)
                 .delete(product_handler::delete_product),
         )
+        .route(
+            "/products/{id}/latest-items",
+            get(product_handler::latest_product_items),
+        )
         .route("/queues/preview", post(queue_handler::preview))
         .route(
             "/queues",

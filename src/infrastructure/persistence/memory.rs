@@ -55,6 +55,28 @@ impl ItemRepository for InMemoryItemRepository {
             .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
         Ok(guard.iter().filter(|i| i.crawled_at >= unix_ts).count() as u64)
     }
+
+    async fn list_latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError> {
+        let guard = self
+            .items
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        let latest = guard
+            .iter()
+            .filter(|i| i.product_id == Some(product_id))
+            .map(|i| i.crawled_at)
+            .max();
+        let Some(ts) = latest else {
+            return Ok(Vec::new());
+        };
+        let mut items: Vec<Item> = guard
+            .iter()
+            .filter(|i| i.product_id == Some(product_id) && i.crawled_at == ts)
+            .cloned()
+            .collect();
+        items.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(items)
+    }
 }
 
 #[derive(Default)]

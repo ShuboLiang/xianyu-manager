@@ -60,6 +60,8 @@ pub trait ItemRepository: Send + Sync {
     async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError>;
     /// 指定时间戳以来的抓取数量（KPI「24h 抓取」用）
     async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError>;
+    /// 某商品最后一轮抓取的明细（同一轮条目共享 crawled_at 作为批次标识）
+    async fn list_latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError>;
 }
 
 #[async_trait]
