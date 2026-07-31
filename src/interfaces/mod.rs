@@ -16,6 +16,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
+use crate::application::ai::classify_service::ClassifyService;
 use crate::application::ai_provider_service::AiProviderService;
 use crate::application::ai_tool_call_service::AiToolCallService;
 use crate::application::crawl_service::CrawlService;
@@ -36,6 +37,7 @@ pub struct AppState {
     pub queue_service: Arc<QueueService>,
     pub ai_provider_service: Arc<AiProviderService>,
     pub ai_tool_call_service: Arc<AiToolCallService>,
+    pub classify_service: Arc<ClassifyService>,
 }
 
 /// 组装整个应用的路由：
@@ -55,6 +57,7 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
                 .delete(tag_handler::delete_tag),
         )
         .route("/tags/{id}/products", get(tag_handler::tag_products))
+        .route("/products/batch", post(product_handler::batch_create_products))
         .route(
             "/products",
             get(product_handler::list_products).post(product_handler::create_product),
@@ -92,6 +95,10 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         )
         .route("/ai/providers/{id}/default", post(ai_handler::set_default_provider))
         .route("/ai/providers/{id}/test", post(ai_handler::test_provider))
+        .route("/ai/classify-products", post(ai_handler::classify_products_sync))
+        .route("/ai/classify-tasks", post(ai_handler::create_classify_task))
+        .route("/ai/classify-tasks/{id}", get(ai_handler::get_classify_task))
+        .route("/ai/classify-tasks/{id}/cancel", post(ai_handler::cancel_classify_task))
         .with_state(state);
 
     Router::new()

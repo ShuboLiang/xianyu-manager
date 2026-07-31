@@ -311,6 +311,218 @@ function resetProductForm() {
 document.getElementById('productSubmitBtn').addEventListener('click', submitProduct);
 document.getElementById('productCancelBtn').addEventListener('click', resetProductForm);
 
+// ---------- 批量导入 ----------
+
+function renderBatchImportTags() {
+    const box = document.getElementById('batchImportTagList');
+    if (cachedTags.length === 0) {
+        box.innerHTML = '<span class="muted">暂无标签</span>';
+        return;
+    }
+    box.innerHTML = cachedTags.map(t => `
+        <label class="tag-check">
+            <input type="checkbox" value="${t.id}">
+            ${t.name}
+        </label>
+    `).join('');
+}
+
+function batchImportTagIds() {
+    return [...document.querySelectorAll('#batchImportTagList input:checked')]
+        .map(i => Number(i.value));
+}
+
+function openBatchImport() {
+    renderBatchImportTags();
+    document.getElementById('batchImportTextarea').value = '';
+    document.getElementById('batchImportResult').hidden = true;
+    document.getElementById('batchImportModal').hidden = false;
+}
+
+function closeBatchImport() {
+    document.getElementById('batchImportModal').hidden = true;
+}
+
+async function submitBatchImport() {
+    const text = document.getElementById('batchImportTextarea').value;
+    const names = text.split(/\n/).map(s => s.trim()).filter(s => s.length > 0);
+    if (names.length === 0) {
+        alert('请输入至少一个商品名');
+        return;
+    }
+    if (names.length > 1000) {
+        alert(`最多 1000 条，当前 ${names.length} 条`);
+        return;
+    }
+    const tag_ids = batchImportTagIds();
+    const btn = document.getElementById('batchImportSubmitBtn');
+    btn.disabled = true;
+    btn.textContent = '提交中...';
+
+    try {
+        const res = await fetch('/api/products/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ names, tag_ids: tag_ids.length ? tag_ids : null }),
+        });
+        const body = await res.json();
+        if (body.code !== 0) {
+            alert('导入失败: ' + body.message);
+            return;
+        }
+        const { created, skipped } = body.data;
+        const resultDiv = document.getElementById('batchImportResult');
+        resultDiv.hidden = false;
+        let html = `创建 <b>${created.length}</b> 条`;
+        if (created.length) {
+            html += '：' + created.map(p => p.name).join('、');
+        }
+        if (skipped.length) {
+            html += `<br>跳过 <b>${skipped.length}</b> 条：` +
+                skipped.map(s => `${s.name}（${s.reason}）`).join('、');
+        }
+        resultDiv.innerHTML = html;
+        if (created.length > 0) {
+            document.getElementById('batchImportTextarea').value = '';
+            loadProducts();
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '提交导入';
+    }
+}
+
+document.getElementById('batchImportBtn').addEventListener('click', openBatchImport);
+document.getElementById('batchImportCloseBtn').addEventListener('click', closeBatchImport);
+document.getElementById('batchImportSubmitBtn').addEventListener('click', submitBatchImport);
+
+// ---------- AI 自动打标签 ----------
+
+let classifyTaskId = null;
+let classifyPollTimer = null;
+
+function selectedProductIds() {
+    return [...document.querySelectorAll('.prod-check:checked')]
+        .map(i => Number(i.value));
+}
+
+async function aiClassify() {
+    const ids = selectedProductIds();
+    if (ids.length === 0) {
+        alert('请先勾选商品');
+        return;
+    }
+
+    if (ids.length <= 50) {
+        const btn = document.getElementById('aiClassifyBtn');
+        btn.disabled = true;
+        btn.textContent = 'AI 分类中...';
+        try {
+            const res = await fetch('/api/ai/classify-products', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_ids: ids }),
+            });
+            const body = await res.json();
+            if (body.code !== 0) {
+                alert('AI 分类失败: ' + body.message);
+                return;
+            }
+            const { suggestions, warnings } = body.data;
+            let msg = `AI 已完成分类，涉及 ${suggestions.length} 个商品`;
+            if (warnings.length) {
+                msg += `，有 ${warnings.length} 条警告：\n` + warnings.join('\n');
+            }
+            alert(msg);
+            loadProducts();
+            loadAiCalls();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'AI 自动打标签';
+        }
+    } else {
+        const res = await fetch('/api/ai/classify-tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_ids: ids }),
+        });
+        const body = await res.json();
+        if (body.code !== 0) {
+            alert('创建分类任务失败: ' + body.message);
+            return;
+        }
+        classifyTaskId = body.data.id;
+        showClassifyProgress();
+        pollClassifyTask();
+    }
+}
+
+function showClassifyProgress() {
+    document.getElementById('classifyProgress').hidden = false;
+    updateClassifyProgress({ processed: 0, total: 0, succeeded: 0, failed: 0, status: 'running' });
+}
+
+function updateClassifyProgress(task) {
+    const pct = task.total > 0 ? Math.round(task.processed / task.total * 100) : 0;
+    document.getElementById('classifyProgressFill').style.width = pct + '%';
+    let statusText = `已处理 ${task.processed}/${task.total}`;
+    if (task.failed > 0) statusText += `，失败 ${task.failed}`;
+    statusText += ` | 状态: ${task.status}`;
+    if (task.error) statusText += ` | 错误: ${task.error}`;
+    document.getElementById('classifyProgressText').textContent = statusText;
+}
+
+async function pollClassifyTask() {
+    if (!classifyTaskId) return;
+    const res = await fetch(`/api/ai/classify-tasks/${classifyTaskId}`);
+    const body = await res.json();
+    if (body.code !== 0) {
+        updateClassifyProgress({ processed: 0, total: 0, succeeded: 0, failed: 0, status: 'failed', error: body.message });
+        stopPolling();
+        return;
+    }
+    const task = body.data;
+    updateClassifyProgress(task);
+    if (['done', 'failed', 'cancelled'].includes(task.status)) {
+        stopPolling();
+        document.getElementById('classifyCancelBtn').hidden = true;
+        loadProducts();
+        loadAiCalls();
+        setTimeout(hideClassifyProgress, 3000);
+        return;
+    }
+    classifyPollTimer = setTimeout(pollClassifyTask, 2000);
+}
+
+function stopPolling() {
+    if (classifyPollTimer) {
+        clearTimeout(classifyPollTimer);
+        classifyPollTimer = null;
+    }
+}
+
+async function cancelClassifyTask() {
+    if (!classifyTaskId) return;
+    const res = await fetch(`/api/ai/classify-tasks/${classifyTaskId}/cancel`, { method: 'POST' });
+    const body = await res.json();
+    if (body.code !== 0) {
+        alert('取消失败: ' + body.message);
+        return;
+    }
+    updateClassifyProgress(body.data);
+    stopPolling();
+    loadProducts();
+}
+
+function hideClassifyProgress() {
+    document.getElementById('classifyProgress').hidden = true;
+    classifyTaskId = null;
+    stopPolling();
+}
+
+document.getElementById('aiClassifyBtn').addEventListener('click', aiClassify);
+document.getElementById('classifyCancelBtn').addEventListener('click', cancelClassifyTask);
+
 // ---------- 抓取队列 ----------
 
 function checkedIds(containerId) {

@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 
+use super::ai_classify_task::AiClassifyTask;
 use super::ai_provider::{AiProvider, NewAiProvider};
 use super::ai_tool_call::{AiToolCall, NewAiToolCall};
 use super::crawl_queue::{CrawlEntry, CrawlQueue, QueueStatus};
@@ -95,4 +96,10 @@ pub trait AiToolCallRepository: Send + Sync {
     async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError>;
     /// 最近的调用记录，按时间倒序
     async fn list_recent(&self, limit: u32) -> Result<Vec<AiToolCall>, DomainError>;
+}
+
+#[async_trait]
+pub trait AiClassifyTaskRepository: Send + Sync {
+    async fn save(&self, task: &AiClassifyTask) -> Result<(), DomainError>;
+    async fn find(&self, id: &str) -> Result<Option<AiClassifyTask>, DomainError>;
 }

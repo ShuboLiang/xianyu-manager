@@ -7,7 +7,7 @@ use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{ProductRepository, TagRepository};
 
 /// 单次批量导入的数量上限
-const BATCH_CREATE_LIMIT: usize = 200;
+const BATCH_CREATE_LIMIT: usize = 1000;
 
 /// 批量创建结果：创建成功的商品 + 被跳过的条目（名称, 原因）
 #[derive(Debug)]
@@ -50,6 +50,69 @@ impl ProductService {
             remark: normalize_remark(remark),
         };
         self.products.create(&new_product).await
+    }
+
+    pub async fn batch_create(
+        &self,
+        names: Vec<String>,
+        tag_ids: Vec<i64>,
+    ) -> Result<BatchCreateResult, DomainError> {
+        if names.len() > BATCH_CREATE_LIMIT {
+            return Err(DomainError::InvalidInput(format!(
+                "单次最多 {} 条，当前 {} 条",
+                BATCH_CREATE_LIMIT,
+                names.len()
+            )));
+        }
+
+        self.ensure_tags_exist(&tag_ids).await?;
+
+        let mut created: Vec<Product> = Vec::new();
+        let mut skipped: Vec<(String, String)> = Vec::new();
+
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for raw in &names {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if seen.contains(trimmed) {
+                skipped.push((trimmed.to_string(), "本批次内重复".into()));
+                continue;
+            }
+            seen.insert(trimmed.to_string());
+
+            let name = match ProductName::new(trimmed) {
+                Ok(n) => n,
+                Err(e) => {
+                    skipped.push((trimmed.to_string(), format!("校验失败: {e}")));
+                    continue;
+                }
+            };
+
+            if let Some(existing) = self.products.find_by_name(name.as_str()).await? {
+                skipped.push((name.as_str().to_string(), "商品名已存在".into()));
+                drop(existing);
+                continue;
+            }
+
+            let new_product = NewProduct {
+                name,
+                tag_ids: tag_ids.clone(),
+                remark: None,
+            };
+
+            match self.products.create(&new_product).await {
+                Ok(p) => created.push(p),
+                Err(e) => {
+                    skipped.push((new_product.name.as_str().to_string(), format!("创建失败: {e}")));
+                }
+            }
+        }
+
+        Ok(BatchCreateResult { created, skipped })
     }
 
     pub async fn get_product(&self, id: i64) -> Result<Product, DomainError> {

@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::application::ai_provider_service::{AiStatus, TestConnectionResult};
+use crate::application::ai::classify_service::{ClassifySuggestion, ClassifySyncResult};
 use crate::application::queue_service::QueueProgress;
+use crate::domain::ai_classify_task::{AiClassifyTask, ClassifyWarning};
 use crate::domain::ai_provider::AiProvider;
 use crate::domain::ai_tool_call::AiToolCall;
 use crate::domain::crawl_queue::Selector;
@@ -409,6 +411,127 @@ impl<T: Serialize> ApiResponse<T> {
             code: -1,
             message: message.into(),
             data: None,
+        }
+    }
+}
+
+// ---------- 批量导入 ----------
+
+#[derive(Debug, Deserialize)]
+pub struct ProductBatchCreateRequest {
+    pub names: Vec<String>,
+    pub tag_ids: Option<Vec<i64>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductBatchCreateResponse {
+    pub created: Vec<ProductResponse>,
+    pub skipped: Vec<BatchSkippedItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchSkippedItem {
+    pub name: String,
+    pub reason: String,
+}
+
+// ---------- AI 自动打标签 ----------
+
+#[derive(Debug, Deserialize)]
+pub struct ClassifyProductsRequest {
+    pub product_ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClassifyProductsResponse {
+    pub summary: String,
+    pub suggestions: Vec<ClassifySuggestionDto>,
+    pub warnings: Vec<String>,
+}
+
+impl From<ClassifySyncResult> for ClassifyProductsResponse {
+    fn from(r: ClassifySyncResult) -> Self {
+        Self {
+            summary: r.summary,
+            suggestions: r.suggestions.into_iter().map(Into::into).collect(),
+            warnings: r.warnings,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClassifySuggestionDto {
+    pub product_id: i64,
+    pub tag_ids: Vec<i64>,
+}
+
+impl From<ClassifySuggestion> for ClassifySuggestionDto {
+    fn from(s: ClassifySuggestion) -> Self {
+        Self {
+            product_id: s.product_id,
+            tag_ids: s.tag_ids,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClassifyTaskResponse {
+    pub id: String,
+    pub status: String,
+    pub total: usize,
+    pub processed: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub progress_pct: f64,
+    pub warnings: Vec<ClassifyWarningDto>,
+    pub current_batch: usize,
+    pub error: Option<String>,
+    pub created_at: u64,
+    pub finished_at: Option<u64>,
+}
+
+impl From<AiClassifyTask> for ClassifyTaskResponse {
+    fn from(t: AiClassifyTask) -> Self {
+        let pct = t.progress_pct();
+        let id = t.id;
+        let status = t.status.as_str().to_string();
+        let total = t.total;
+        let processed = t.processed;
+        let succeeded = t.succeeded;
+        let failed = t.failed;
+        let warnings = t.warnings.into_iter().map(Into::into).collect();
+        let current_batch = t.current_batch;
+        let error = t.error;
+        let created_at = t.created_at;
+        let finished_at = t.finished_at;
+        Self {
+            id,
+            status,
+            total,
+            processed,
+            succeeded,
+            failed,
+            progress_pct: pct,
+            warnings,
+            current_batch,
+            error,
+            created_at,
+            finished_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClassifyWarningDto {
+    pub product_id: i64,
+    pub message: String,
+}
+
+impl From<ClassifyWarning> for ClassifyWarningDto {
+    fn from(w: ClassifyWarning) -> Self {
+        Self {
+            product_id: w.product_id,
+            message: w.message,
         }
     }
 }

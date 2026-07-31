@@ -1,3 +1,4 @@
+pub mod ai_classify_task;
 pub mod ai_provider;
 pub mod ai_tool_call;
 pub mod crawl_queue;

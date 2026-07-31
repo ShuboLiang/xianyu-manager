@@ -181,8 +181,8 @@ impl AiGateway for RigAiGateway {
             let prompt = if round == 0 {
                 Message::user(user)
             } else {
-                // 非首轮用空 user 消息推动模型继续；真实场景可换成更明确的提示
-                Message::user("继续")
+                // 非首轮推动模型继续，并提醒它必须用完写工具再总结
+                Message::user("继续。如果你还没有通过工具提交全部结果，请先调用相应工具提交，全部提交完再输出简短总结。")
             };
 
             let response = model
@@ -193,6 +193,12 @@ impl AiGateway for RigAiGateway {
                 .send()
                 .await
                 .map_err(|e| DomainError::Infrastructure(format!("AI agent 请求失败: {e}")))?;
+
+            // 首轮 user 消息（商品清单等关键输入）必须进入历史，
+            // 否则第二轮起模型只能看到工具往返，看不到原始请求
+            if round == 0 {
+                history.push(Message::user(user));
+            }
 
             let mut texts = Vec::new();
             let mut tool_calls = Vec::new();

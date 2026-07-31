@@ -4,7 +4,10 @@ use axum::extract::{Json, Path, State};
 
 use crate::domain::product::Product;
 
-use super::dto::{ApiResponse, ProductCreateRequest, ProductResponse, ProductUpdateRequest};
+use super::dto::{
+    ApiResponse, ProductBatchCreateRequest, ProductBatchCreateResponse, ProductCreateRequest,
+    ProductResponse, ProductUpdateRequest, BatchSkippedItem,
+};
 use super::AppState;
 
 /// GET /api/products：商品列表（含标签名）
@@ -112,4 +115,35 @@ async fn tag_name_map(state: &AppState) -> HashMap<i64, String> {
         .into_iter()
         .map(|t| (t.id, t.name.as_str().to_string()))
         .collect()
+}
+
+/// POST /api/products/batch：批量导入商品
+pub async fn batch_create_products(
+    State(state): State<AppState>,
+    Json(req): Json<ProductBatchCreateRequest>,
+) -> Json<ApiResponse<ProductBatchCreateResponse>> {
+    match state
+        .product_service
+        .batch_create(req.names, req.tag_ids.unwrap_or_default())
+        .await
+    {
+        Ok(result) => {
+            let tag_names = tag_name_map(&state).await;
+            let created: Vec<ProductResponse> = result
+                .created
+                .into_iter()
+                .map(|p| {
+                    let names = resolve_names(&p, &tag_names);
+                    ProductResponse::from_product(p, names)
+                })
+                .collect();
+            let skipped: Vec<BatchSkippedItem> = result
+                .skipped
+                .into_iter()
+                .map(|(name, reason)| BatchSkippedItem { name, reason })
+                .collect();
+            Json(ApiResponse::ok(ProductBatchCreateResponse { created, skipped }))
+        }
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
 }

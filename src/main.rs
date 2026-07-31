@@ -7,6 +7,7 @@ mod interfaces;
 
 use std::sync::Arc;
 
+use application::ai::classify_service::ClassifyService;
 use application::ai_provider_service::AiProviderService;
 use application::ai_tool_call_service::AiToolCallService;
 use application::crawl_service::CrawlService;
@@ -16,7 +17,9 @@ use application::product_service::ProductService;
 use application::queue_service::QueueService;
 use application::tag_service::TagService;
 use infrastructure::config::Config;
-use infrastructure::persistence::memory::{InMemoryCrawlTaskRepository, InMemoryItemRepository};
+use infrastructure::persistence::memory::{
+    InMemoryAiClassifyTaskRepository, InMemoryCrawlTaskRepository, InMemoryItemRepository,
+};
 use infrastructure::persistence::sqlite::{
     self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteProductRepository,
     SqliteQueueRepository, SqliteTagRepository,
@@ -55,13 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let item_service = Arc::new(ItemService::new(item_repo.clone()));
     let tag_service = Arc::new(TagService::new(tag_repo.clone()));
     let product_service = Arc::new(ProductService::new(product_repo.clone(), tag_repo.clone()));
-    let queue_service = Arc::new(QueueService::new(
-        queue_repo,
-        product_repo,
-        tag_repo,
-        gateway,
-        item_repo,
-    ));
+
     let ai_gateway: Arc<dyn crate::application::ports::AiGateway> = Arc::new(
         crate::infrastructure::ai_gateway::RigAiGateway::new(
             ai_provider_repo.clone(),
@@ -80,10 +77,26 @@ async fn main() -> anyhow::Result<()> {
     };
     let ai_provider_service = Arc::new(AiProviderService::new(
         ai_provider_repo,
-        ai_gateway,
+        ai_gateway.clone(),
         ai_env_fallback,
     ));
     let ai_tool_call_service = Arc::new(AiToolCallService::new(ai_tool_call_repo));
+
+    let classify_task_repo = Arc::new(InMemoryAiClassifyTaskRepository::default());
+    let classify_service = Arc::new(ClassifyService::new(
+        classify_task_repo,
+        product_repo.clone(),
+        tag_repo.clone(),
+        ai_gateway,
+    ));
+
+    let queue_service = Arc::new(QueueService::new(
+        queue_repo,
+        product_repo,
+        tag_repo,
+        gateway,
+        item_repo,
+    ));
 
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
@@ -98,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
             queue_service,
             ai_provider_service,
             ai_tool_call_service,
+            classify_service,
         },
         &config.static_dir,
     );

@@ -8,7 +8,8 @@ use crate::application::ai_provider_service::AiProviderPatch;
 
 use super::dto::{
     AiProviderCreateRequest, AiProviderResponse, AiProviderUpdateRequest, AiStatusResponse,
-    AiToolCallResponse, ApiResponse, TestConnectionResponse,
+    AiToolCallResponse, ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse,
+    ClassifyTaskResponse, TestConnectionResponse,
 };
 use super::AppState;
 
@@ -130,3 +131,48 @@ pub async fn list_tool_calls(
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }
+
+/// POST /api/ai/classify-products：同步 AI 自动打标签（≤50 商品）
+pub async fn classify_products_sync(
+    State(state): State<AppState>,
+    Json(req): Json<ClassifyProductsRequest>,
+) -> Json<ApiResponse<ClassifyProductsResponse>> {
+    match state.classify_service.classify_sync(req.product_ids).await {
+        Ok(result) => Json(ApiResponse::ok(result.into())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/ai/classify-tasks：创建异步 AI 打标签任务
+pub async fn create_classify_task(
+    State(state): State<AppState>,
+    Json(req): Json<ClassifyProductsRequest>,
+) -> Json<ApiResponse<ClassifyTaskResponse>> {
+    match state.classify_service.create_classify_task(req.product_ids).await {
+        Ok(task) => Json(ApiResponse::ok(task.into())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/ai/classify-tasks/{id}：查询异步任务
+pub async fn get_classify_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<ApiResponse<ClassifyTaskResponse>> {
+    match state.classify_service.get_classify_task(&id).await {
+        Ok(task) => Json(ApiResponse::ok(task.into())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/ai/classify-tasks/{id}/cancel：取消运行中的任务
+pub async fn cancel_classify_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<ApiResponse<ClassifyTaskResponse>> {
+    match state.classify_service.cancel_classify_task(&id).await {
+        Ok(task) => Json(ApiResponse::ok(task.into())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+

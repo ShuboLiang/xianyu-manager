@@ -11,17 +11,17 @@ cargo run        # 默认 http://127.0.0.1:3000
 
 环境变量配置（见 `src/infrastructure/config.rs`）：
 
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `HOST` | `127.0.0.1` | 监听地址 |
-| `PORT` | `3000` | 监听端口 |
-| `STATIC_DIR` | `static` | 前端静态文件目录 |
-| `GATEWAY` | `mock` | `mock`=假数据网关，`http`=真实闲鱼接口（未实现） |
-| `XIANYU_COOKIE` | - | `GATEWAY=http` 时的闲鱼登录态 Cookie |
-| `DATABASE_PATH` | `data/xianyu.db` | SQLite 数据库文件路径（目录自动创建） |
-| `AI_API_KEY` | - | AI 环境变量兜底密钥（未配置 DB 默认 provider 时生效） |
-| `AI_BASE_URL` | `https://api.openai.com/v1` | AI 环境变量兜底端点（OpenAI 兼容） |
-| `AI_MODEL` | `gpt-4o-mini` | AI 环境变量兜底模型名 |
+| 变量            | 默认值                      | 说明                                                  |
+| --------------- | --------------------------- | ----------------------------------------------------- |
+| `HOST`          | `127.0.0.1`                 | 监听地址                                              |
+| `PORT`          | `3000`                      | 监听端口                                              |
+| `STATIC_DIR`    | `static`                    | 前端静态文件目录                                      |
+| `GATEWAY`       | `mock`                      | `mock`=假数据网关，`http`=真实闲鱼接口（未实现）      |
+| `XIANYU_COOKIE` | -                           | `GATEWAY=http` 时的闲鱼登录态 Cookie                  |
+| `DATABASE_PATH` | `data/xianyu.db`            | SQLite 数据库文件路径（目录自动创建）                 |
+| `AI_API_KEY`    | -                           | AI 环境变量兜底密钥（未配置 DB 默认 provider 时生效） |
+| `AI_BASE_URL`   | `https://api.openai.com/v1` | AI 环境变量兜底端点（OpenAI 兼容）                    |
+| `AI_MODEL`      | `gpt-4o-mini`               | AI 环境变量兜底模型名                                 |
 
 ## 架构（DDD-Lite，四层）
 
