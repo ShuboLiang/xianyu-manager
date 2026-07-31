@@ -20,11 +20,11 @@ use application::stats_service::StatsService;
 use application::tag_service::TagService;
 use infrastructure::config::Config;
 use infrastructure::persistence::memory::{
-    InMemoryAiClassifyTaskRepository, InMemoryCrawlTaskRepository, InMemoryItemRepository,
+    InMemoryAiClassifyTaskRepository, InMemoryCrawlTaskRepository,
 };
 use infrastructure::persistence::sqlite::{
-    self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteProductRepository,
-    SqliteQueueRepository, SqliteTagRepository,
+    self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteItemRepository,
+    SqliteProductRepository, SqliteQueueRepository, SqliteTagRepository,
 };
 use infrastructure::webbridge_client::WebBridgeClient;
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
@@ -43,9 +43,9 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env();
 
     // infrastructure：仓储与网关实现
-    let item_repo = Arc::new(InMemoryItemRepository::default());
     let task_repo = Arc::new(InMemoryCrawlTaskRepository::default());
     let pool = sqlite::connect(&config.database_path).await?;
+    let item_repo = Arc::new(SqliteItemRepository::new(pool.clone()));
     let tag_repo = Arc::new(SqliteTagRepository::new(pool.clone()));
     let product_repo = Arc::new(SqliteProductRepository::new(pool.clone()));
     let queue_repo = Arc::new(SqliteQueueRepository::new(pool.clone()));

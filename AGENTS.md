@@ -78,8 +78,8 @@ src/
     ├── webbridge_client.rs#  WebBridge 客户端：驱动本机真实浏览器搜闲鱼并提取候选（也实现 XianYuGateway）
     ├── ai_gateway.rs    #   AiGateway 实现：基于 rig-core 的 OpenAI 兼容端点 + 手写 ReAct 工具循环
     └── persistence/
-        ├── memory.rs    #   内存仓储：商品、抓取任务（重启即失）
-        └── sqlite.rs    #   SQLite 仓储：标签、待爬取商品、抓取队列+条目、AI 配置与审计（共享连接池，启动自动建表）
+        ├── memory.rs    #   内存仓储：抓取任务、AI 分类任务（重启即失）；ItemRepository 内存实现保留为备选
+        └── sqlite.rs    #   SQLite 仓储：抓取商品数据、标签、待爬取商品、抓取队列+条目、AI 配置与审计（共享连接池，启动自动建表）
 static/                  # 前端构建产物（由 web/ 执行 npm run build 生成，axum 托管，勿手改）
 web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + shadcn/ui
 ├── src/types/generated/ #   ts-rs 从 dto.rs 自动生成的类型（cargo test export_bindings，勿手改）
@@ -102,7 +102,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + sh
 - **抓取是异步任务，不是同步请求**：`POST /api/crawl` 只创建任务并返回句柄，后台 tokio task 执行抓取，前端轮询 `GET /api/crawl/{id}`。防止多页抓取时 HTTP 超时。
 - **任务状态机**：`Pending → Running → Done/Failed`。只有 Pending 能 `start()`，只有 Running 能 `finish()`；规则在 `CrawlTask` 实体方法里，不允许在别处直接改状态。
 - **闲鱼网关是端口+实现（防腐层）**：`XianYuGateway` trait 定义在 `application/ports.rs`，实现（登录态、mtop 签名、解析）在 `infrastructure/xianyu_gateway.rs`。开发用 `GATEWAY=mock`。
-- **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。商品和任务目前是内存实现；标签已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
+- **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。抓取商品数据（items 表，id=详情页 URL，重复抓取 INSERT OR REPLACE 覆盖）、标签、商品、队列、AI 配置/审计均已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）；抓取任务与 AI 分类任务仍是内存实现（重启即失，可接受）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
 - **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
 - **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）只由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
 - **删除语义**：数据库层一律 `CASCADE` 兜底（删标签/删商品只清关联，另一方不受影响）；交互层做影响提示——`GET /api/tags/{id}/products` 返回使用该标签的商品，前端删除标签前在确认框中列出受影响商品。不做「阻止删除」。

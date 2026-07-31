@@ -1,5 +1,5 @@
-//! 内存仓储实现：骨架阶段使用，重启即丢失。
-//! 后续接 SQLite 时新增 SqliteItemRepository 实现同样的 trait 即可。
+//! 内存仓储实现：抓取任务、AI 分类任务（重启即丢失，可接受）。
+//! ItemRepository 的内存实现保留为备选（默认已切到 SqliteItemRepository）。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -14,11 +14,13 @@ use crate::domain::repository::{
     AiClassifyTaskRepository, CrawlTaskRepository, ItemRepository, Page,
 };
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct InMemoryItemRepository {
     items: Mutex<Vec<Item>>,
 }
 
+#[allow(dead_code)]
 #[async_trait]
 impl ItemRepository for InMemoryItemRepository {
     async fn save_all(&self, items: &[Item]) -> Result<(), DomainError> {

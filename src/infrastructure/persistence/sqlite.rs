@@ -10,10 +10,11 @@ use crate::domain::ai_provider::{AiProvider, NewAiProvider};
 use crate::domain::ai_tool_call::{AiToolCall, NewAiToolCall};
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus};
 use crate::domain::error::DomainError;
+use crate::domain::item::Item;
 use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{
-    AiProviderRepository, AiToolCallRepository, Page, ProductRepository, ProductSortColumn,
-    QueueRepository, TagRepository,
+    AiProviderRepository, AiToolCallRepository, ItemRepository, Page, ProductRepository,
+    ProductSortColumn, QueueRepository, TagRepository,
 };
 use crate::domain::tag::{NewTag, Tag, TagName};
 
@@ -156,6 +157,21 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             error       TEXT,
             duration_ms INTEGER NOT NULL,
             created_at  INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    // 抓取到的原始商品数据：id = 详情页 URL（同一链接重复抓取时更新价格与时间）
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS items (
+            id         TEXT PRIMARY KEY,
+            title      TEXT NOT NULL,
+            price      REAL NOT NULL,
+            seller     TEXT NOT NULL DEFAULT '',
+            url        TEXT NOT NULL,
+            crawled_at INTEGER NOT NULL
         )",
     )
     .execute(&*pool)
@@ -901,4 +917,123 @@ fn row_to_ai_tool_call(row: &SqliteRow) -> Result<AiToolCall, DomainError> {
         duration_ms: row.get::<i64, _>("duration_ms") as u64,
         created_at: row.get::<i64, _>("created_at") as u64,
     })
+}
+
+// ---------- 抓取到的原始商品数据 ----------
+
+pub struct SqliteItemRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteItemRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ItemRepository for SqliteItemRepository {
+    /// 同一链接重复抓取时覆盖（价格/标题可能变化，crawled_at 刷新）
+    async fn save_all(&self, items: &[Item]) -> Result<(), DomainError> {
+        for item in items {
+            sqlx::query(
+                "INSERT OR REPLACE INTO items (id, title, price, seller, url, crawled_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&item.id)
+            .bind(&item.title)
+            .bind(item.price)
+            .bind(&item.seller)
+            .bind(&item.url)
+            .bind(item.crawled_at as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        }
+        Ok(())
+    }
+
+    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT * FROM items ORDER BY crawled_at DESC, id ASC LIMIT ? OFFSET ?",
+        )
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        let items = rows.iter().map(row_to_item).collect();
+
+        let count_row = sqlx::query("SELECT COUNT(*) AS c FROM items")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        let total = count_row.get::<i64, _>("c") as u64;
+
+        Ok(Page { items, total })
+    }
+
+    async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError> {
+        let row = sqlx::query("SELECT COUNT(*) AS c FROM items WHERE crawled_at >= ?")
+            .bind(unix_ts as i64)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(row.get::<i64, _>("c") as u64)
+    }
+}
+
+fn row_to_item(row: &SqliteRow) -> Item {
+    Item {
+        id: row.get("id"),
+        title: row.get("title"),
+        price: row.get("price"),
+        seller: row.get("seller"),
+        url: row.get("url"),
+        crawled_at: row.get::<i64, _>("crawled_at") as u64,
+    }
+}
+
+#[cfg(test)]
+mod item_repo_tests {
+    use super::*;
+    use crate::domain::crawl_task::now_unix;
+
+    fn sample(id: &str, price: f64, crawled_at: u64) -> Item {
+        Item {
+            id: id.into(),
+            title: format!("商品 {id}"),
+            price,
+            seller: "卖家".into(),
+            url: format!("https://www.goofish.com/item?id={id}"),
+            crawled_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn save_dedup_paginate_and_count_since() {
+        let pool = connect(":memory:").await.unwrap();
+        let repo = SqliteItemRepository::new(pool);
+        let now = now_unix();
+
+        repo.save_all(&[sample("a", 100.0, now - 10), sample("b", 200.0, now)])
+            .await
+            .unwrap();
+        // 同 id 再抓：覆盖而不是新增
+        repo.save_all(&[sample("a", 150.0, now)]).await.unwrap();
+
+        let page = repo.list_paginated(0, 10).await.unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.items.len(), 2);
+        // 按抓取时间倒序：a（刚刷新）在最前
+        assert_eq!(page.items[0].id, "a");
+        assert_eq!(page.items[0].price, 150.0);
+
+        let page = repo.list_paginated(1, 1).await.unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "b");
+
+        assert_eq!(repo.count_since(now - 5).await.unwrap(), 2);
+        assert_eq!(repo.count_since(now + 5).await.unwrap(), 0);
+    }
 }
