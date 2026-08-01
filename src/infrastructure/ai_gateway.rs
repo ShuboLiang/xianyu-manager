@@ -47,9 +47,20 @@ impl RigAiGateway {
     #[allow(dead_code)]
     async fn resolve_provider(&self) -> Result<AiProvider, DomainError> {
         if let Some(p) = self.providers.find_default().await? {
+            tracing::debug!(
+                "AI 使用数据库默认 provider: name={}, base_url={}, model={}",
+                p.name,
+                p.base_url,
+                p.model
+            );
             return Ok(p);
         }
         if let Some(key) = &self.env.api_key {
+            tracing::debug!(
+                "AI 使用环境变量兜底: base_url={}, model={}",
+                self.env.base_url,
+                self.env.model
+            );
             let now = crate::domain::crawl_task::now_unix();
             return Ok(AiProvider {
                 id: 0,
@@ -104,9 +115,11 @@ async fn execute_tool(
     tool: &Arc<dyn AiTool>,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, DomainError> {
+    tracing::debug!("执行工具 {}: args={}", tool.name(), arguments);
     let start = std::time::Instant::now();
     let result = tool.execute(arguments.clone()).await;
     let duration_ms = start.elapsed().as_millis() as u64;
+    tracing::debug!("工具 {} 执行耗时 {} ms", tool.name(), duration_ms);
 
     let (result_json, error_text) = match &result {
         Ok(v) => (Some(v.to_string()), None),
@@ -142,6 +155,7 @@ impl AiGateway for RigAiGateway {
         system: &str,
         user: &str,
     ) -> Result<String, DomainError> {
+        tracing::debug!("AI complete 请求: model={}, user_len={}", provider.model, user.len());
         let client = Self::build_client(provider)?;
         let model = client.completion_model(&provider.model);
         let response = model
@@ -159,7 +173,10 @@ impl AiGateway for RigAiGateway {
                 _ => None,
             })
             .collect();
-        Ok(texts.join(""))
+        let reply = texts.join("");
+        tracing::debug!("AI complete 响应长度: {}", reply.len());
+        tracing::trace!("AI complete 响应内容: {}", reply);
+        Ok(reply)
     }
 
     async fn run_agent(
@@ -173,11 +190,18 @@ impl AiGateway for RigAiGateway {
         let client = Self::build_client(&provider)?;
         let model = client.completion_model(&provider.model);
         let tool_defs = Self::tool_definitions(tools);
+        tracing::debug!(
+            "AI agent 启动: model={}, tools={:?}, max_rounds={}",
+            provider.model,
+            tools.iter().map(|t| t.name()).collect::<Vec<_>>(),
+            max_rounds
+        );
 
         // 对话历史：先放入初始 system/user；后续每轮追加 assistant(tool_call) + user(tool_result)
         let mut history: Vec<Message> = vec![];
 
         for round in 0..max_rounds {
+            tracing::debug!("AI agent 第 {} 轮开始", round + 1);
             let prompt = if round == 0 {
                 Message::user(user)
             } else {
@@ -204,8 +228,19 @@ impl AiGateway for RigAiGateway {
             let mut tool_calls = Vec::new();
             for item in response.choice.iter() {
                 match item {
-                    AssistantContent::Text(t) => texts.push(t.text.clone()),
-                    AssistantContent::ToolCall(tc) => tool_calls.push(tc.clone()),
+                    AssistantContent::Text(t) => {
+                        tracing::trace!("AI agent 第 {} 轮文本输出: {}", round + 1, t.text);
+                        texts.push(t.text.clone());
+                    }
+                    AssistantContent::ToolCall(tc) => {
+                        tracing::debug!(
+                            "AI agent 第 {} 轮调用工具: {} args={}",
+                            round + 1,
+                            tc.function.name,
+                            tc.function.arguments
+                        );
+                        tool_calls.push(tc.clone());
+                    }
                     _ => {}
                 }
             }
@@ -228,7 +263,9 @@ impl AiGateway for RigAiGateway {
 
             if tool_calls.is_empty() {
                 // 没有工具调用，直接返回文本
-                return Ok(texts.join(""));
+                let reply = texts.join("");
+                tracing::debug!("AI agent 第 {} 轮无工具调用，直接返回（长度 {}）", round + 1, reply.len());
+                return Ok(reply);
             }
 
             // 执行工具调用并把结果回填
@@ -241,10 +278,16 @@ impl AiGateway for RigAiGateway {
                     })?;
 
                 let tool_result = match execute_tool(self.calls.clone(), tool, tc.function.arguments).await {
-                    Ok(v) => ToolResultContent::json(v),
-                    Err(e) => ToolResultContent::text(format!(
-                        "工具执行失败: {e}"
-                    )),
+                    Ok(v) => {
+                        tracing::trace!("工具 {} 执行结果: {}", tc.function.name, v);
+                        ToolResultContent::json(v)
+                    }
+                    Err(e) => {
+                        tracing::debug!("工具 {} 执行失败: {e}", tc.function.name);
+                        ToolResultContent::text(format!(
+                            "工具执行失败: {e}"
+                        ))
+                    }
                 };
 
                 history.push(Message::User {
@@ -257,6 +300,7 @@ impl AiGateway for RigAiGateway {
             }
         }
 
+        tracing::warn!("AI agent 达到最大轮数 {} 仍未给出最终答案", max_rounds);
         Err(DomainError::InvalidState(
             "AI agent 工具调用轮数达到上限仍未给出最终答案".into(),
         ))

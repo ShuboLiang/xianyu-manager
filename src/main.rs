@@ -26,7 +26,7 @@ use infrastructure::persistence::sqlite::{
     self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteItemRepository,
     SqliteProductRepository, SqliteQueueRepository, SqliteTagRepository,
 };
-use infrastructure::webbridge_client::WebBridgeClient;
+use infrastructure::webbridge_client::{launch_webbridge_daemon, WebBridgeClient};
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
 use interfaces::AppState;
 
@@ -52,6 +52,15 @@ async fn main() -> anyhow::Result<()> {
     let ai_provider_repo = Arc::new(SqliteAiProviderRepository::new(pool.clone()));
     let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool));
     // GATEWAY=webbridge：真实抓取走 WebBridge 浏览器（同时作为普通网关供 CrawlService 取原始候选）
+    if config.gateway == "webbridge" {
+        if let Some(bin_path) = &config.webbridge_bin_path {
+            if let Err(e) = launch_webbridge_daemon(bin_path, &config.webbridge_url).await {
+                tracing::warn!("自动启动 WebBridge 失败: {e}");
+            }
+        } else {
+            tracing::warn!("未配置 WEBBRIDGE_BIN_PATH，无法自动启动 WebBridge");
+        }
+    }
     let webbridge = (config.gateway == "webbridge")
         .then(|| Arc::new(WebBridgeClient::new(&config.webbridge_url)));
     let gateway: Arc<dyn XianYuGateway> = match (config.gateway.as_str(), webbridge.clone()) {

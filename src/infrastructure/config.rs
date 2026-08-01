@@ -11,6 +11,8 @@ pub struct Config {
     pub gateway: String,
     /// Kimi WebBridge daemon 地址（GATEWAY=webbridge 时使用）
     pub webbridge_url: String,
+    /// WebBridge 可执行文件路径；GATEWAY=webbridge 且 daemon 未启动时自动拉起
+    pub webbridge_bin_path: Option<String>,
     /// 回收价系数：回收价 = 中位数 × 系数，默认 0.9
     pub recycle_factor: f64,
     /// SQLite 数据库文件路径
@@ -39,6 +41,10 @@ impl Config {
             gateway: std::env::var("GATEWAY").unwrap_or_else(|_| "webbridge".into()),
             webbridge_url: std::env::var("WEBBRIDGE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:10086".into()),
+            webbridge_bin_path: std::env::var("WEBBRIDGE_BIN_PATH")
+                .ok()
+                .filter(|p| !p.trim().is_empty())
+                .or_else(default_webbridge_bin_path),
             recycle_factor: std::env::var("RECYCLE_FACTOR")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
@@ -60,4 +66,26 @@ impl Config {
             .parse()
             .expect("非法的监听地址")
     }
+}
+
+/// 默认 WebBridge 可执行文件路径：
+/// Windows: `%USERPROFILE%\.kimi-webbridge\bin\kimi-webbridge.exe`
+/// 其他:    `~/.kimi-webbridge/bin/kimi-webbridge`
+fn default_webbridge_bin_path() -> Option<String> {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    }?;
+    let name = if cfg!(windows) {
+        "kimi-webbridge.exe"
+    } else {
+        "kimi-webbridge"
+    };
+    Some(std::path::Path::new(&home)
+        .join(".kimi-webbridge")
+        .join("bin")
+        .join(name)
+        .to_string_lossy()
+        .into_owned())
 }

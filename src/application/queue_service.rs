@@ -112,9 +112,16 @@ impl QueueService {
 
     pub async fn preview(&self, target: EnqueueTarget) -> Result<PreviewResult, DomainError> {
         let candidates = self.resolve_targets(&target).await?;
+        let candidates_len = candidates.len();
         let queued: HashSet<i64> = self.queues.queued_product_ids().await?.into_iter().collect();
         let (skipped, to_add): (Vec<_>, Vec<_>) =
             candidates.into_iter().partition(|p| queued.contains(&p.id));
+        tracing::debug!(
+            "预览入队：候选 {}，已在队列 {}，将新增 {}",
+            candidates_len,
+            skipped.len(),
+            to_add.len()
+        );
         Ok(PreviewResult { to_add, skipped })
     }
 
@@ -141,6 +148,7 @@ impl QueueService {
         let ids: Vec<i64> = preview.to_add.iter().map(|p| p.id).collect();
         self.queues.add_entries(queue.id, &ids).await?;
         tracing::info!("队列 #{} 已创建：{} 条，状态 {}", queue.id, ids.len(), status.as_str());
+        tracing::debug!("队列 #{} 包含商品 ids: {:?}", queue.id, ids);
         Ok((queue, preview))
     }
 
@@ -305,8 +313,10 @@ impl QueueService {
 
     /// 全局唯一 worker：找 running 队列逐条处理；没有则提升最早的 waiting
     async fn worker_loop(&self) {
+        tracing::debug!("队列 worker 已启动");
         loop {
             let running = self.queues.current_running_queue().await;
+            tracing::trace!("worker 轮询：当前 running 队列查询结果 {:?}", running.is_ok());
             match running {
                 Ok(Some(queue)) => self.process_one_round(queue).await,
                 Ok(None) => match self.queues.oldest_waiting_queue().await {
@@ -334,6 +344,7 @@ impl QueueService {
 
     /// 处理当前 running 队列的一轮：一条条目 + 条间间隔；条目耗尽则队列完成
     async fn process_one_round(&self, queue: CrawlQueue) {
+        tracing::trace!("处理队列 #{} 的一轮", queue.id);
         match self.queues.next_pending_entry(queue.id).await {
             Ok(Some(entry)) => {
                 self.process_entry(entry).await;
@@ -358,6 +369,7 @@ impl QueueService {
     /// 优雅暂停：当前条目跑完才停；条目只存 id，执行时现查商品
     async fn process_entry(&self, mut entry: CrawlEntry) {
         entry.status = EntryStatus::Running;
+        tracing::debug!("条目 #{} (product={}) 开始执行", entry.id, entry.product_id);
         let _ = self.queues.update_entry(&entry).await;
 
         let result = self.crawl_one(&entry).await;
@@ -365,13 +377,16 @@ impl QueueService {
             Ok(()) => {
                 entry.status = EntryStatus::Done;
                 entry.crawled_at = Some(now_unix());
+                tracing::debug!("条目 #{} 执行完成", entry.id);
             }
             Err(EntryFailure::Skipped) => {
                 entry.status = EntryStatus::Skipped;
+                tracing::debug!("条目 #{} 跳过（商品已删除）", entry.id);
             }
             Err(EntryFailure::Failed(msg)) => {
                 entry.status = EntryStatus::Failed;
-                entry.error = Some(msg);
+                entry.error = Some(msg.clone());
+                tracing::debug!("条目 #{} 失败: {}", entry.id, msg);
             }
         }
         if let Err(e) = self.queues.update_entry(&entry).await {
@@ -396,6 +411,7 @@ impl QueueService {
 
         // AI 抓取路径：WebBridge 搜索 → AI 筛选 8 条 → 工具内算中位数/回收价并落库
         if let Some(agent) = &self.crawl_agent {
+            tracing::debug!("商品 {} 走 AI 抓取路径", product.id);
             let outcome = agent
                 .crawl_product(&product)
                 .await
@@ -411,11 +427,13 @@ impl QueueService {
             return Ok(());
         }
 
+        tracing::debug!("商品 {} 走 gateway 直接抓取路径", product.id);
         let mut items = self
             .gateway
             .search(product.name.as_str(), 1)
             .await
             .map_err(|e| EntryFailure::Failed(e.to_string()))?;
+        tracing::debug!("商品 {} gateway 返回 {} 条原始候选", product.id, items.len());
 
         for it in &mut items {
             it.product_id = Some(product.id);
@@ -451,14 +469,27 @@ impl QueueService {
     async fn sleep_interval(&self, queue: &CrawlQueue) {
         let jitter = pseudo_rand(queue.interval_secs);
         let total = queue.interval_secs + jitter;
-        for _ in 0..total {
+        tracing::debug!("队列 #{} 条间休息 {} 秒（interval={} + jitter={})", queue.id, total, queue.interval_secs, jitter);
+        for i in 0..total {
             tokio::time::sleep(Duration::from_secs(1)).await;
             // 队列不再是 running（被暂停/取消）则提前结束睡眠
             match self.queues.find_queue(queue.id).await {
                 Ok(Some(q)) if q.status == QueueStatus::Running => {}
-                _ => return,
+                Ok(Some(q)) => {
+                    tracing::debug!("队列 #{} 休息 {} 秒后被中断（状态 {}）", queue.id, i + 1, q.status.as_str());
+                    return;
+                }
+                Ok(None) => {
+                    tracing::debug!("队列 #{} 休息 {} 秒后被中断（队列已删除）", queue.id, i + 1);
+                    return;
+                }
+                Err(e) => {
+                    tracing::debug!("队列 #{} 休息 {} 秒后查询失败: {e}", queue.id, i + 1);
+                    return;
+                }
             }
         }
+        tracing::trace!("队列 #{} 完成条间休息", queue.id);
     }
 }
 

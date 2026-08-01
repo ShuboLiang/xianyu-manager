@@ -35,6 +35,7 @@ impl CrawlService {
         max_pages: u32,
     ) -> Result<CrawlTask, DomainError> {
         let task = CrawlTask::new(Keyword::new(keyword)?, PageRange::new(max_pages)?);
+        tracing::debug!("创建抓取任务 {}: keyword={}, max_pages={}", task.id, task.keyword.as_str(), task.max_pages.value());
         self.tasks.save(&task).await?;
 
         let this = Arc::clone(self);
@@ -58,13 +59,20 @@ impl CrawlService {
     /// 后台执行：启动 → 逐页抓取 → 落库 → 完成/失败
     async fn run_task(&self, task_id: &str) -> Result<(), DomainError> {
         let mut task = self.get_task(task_id).await?;
+        tracing::debug!("抓取任务 {} 开始执行", task_id);
         task.start()?;
         self.tasks.save(&task).await?;
 
         let result = self.fetch_pages(&task).await;
         match result {
-            Ok(count) => task.finish(count)?,
-            Err(e) => task.fail(e.to_string()),
+            Ok(count) => {
+                tracing::info!("抓取任务 {} 完成：共 {} 条", task_id, count);
+                task.finish(count)?;
+            }
+            Err(e) => {
+                tracing::error!("抓取任务 {} 执行失败: {e}", task_id);
+                task.fail(e.to_string());
+            }
         }
         self.tasks.save(&task).await
     }
@@ -72,10 +80,13 @@ impl CrawlService {
     async fn fetch_pages(&self, task: &CrawlTask) -> Result<usize, DomainError> {
         let mut total = 0;
         for page in 1..=task.max_pages.value() {
+            tracing::debug!("抓取任务 {} 获取第 {} 页", task.id, page);
             let batch = self.gateway.search(task.keyword.as_str(), page).await?;
+            tracing::debug!("抓取任务 {} 第 {} 页得到 {} 条", task.id, page, batch.len());
             total += batch.len();
             self.items.save_all(&batch).await?;
         }
+        tracing::debug!("抓取任务 {} 逐页抓取结束，累计 {} 条", task.id, total);
         Ok(total)
     }
 }

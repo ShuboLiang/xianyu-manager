@@ -28,6 +28,7 @@ cd web && npm run dev   # http://127.0.0.1:5173，/api 自动代理到 127.0.0.1
 | `STATIC_DIR`    | `static`                    | 前端静态文件目录                                      |
 | `GATEWAY`       | `webbridge`                 | `webbridge`=真实抓取（WebBridge 浏览器 + AI 筛选，默认）；`mock`=假数据网关；`http`=真实接口（未实现） |
 | `WEBBRIDGE_URL` | `http://127.0.0.1:10086`    | `GATEWAY=webbridge` 时的 Kimi WebBridge daemon 地址   |
+| `WEBBRIDGE_BIN_PATH` | 自动推导：Windows `%USERPROFILE%\.kimi-webbridge\bin\kimi-webbridge.exe`，其他 `~/.kimi-webbridge/bin/kimi-webbridge` | `GATEWAY=webbridge` 时若 daemon 未运行，自动执行该路径的 `... start` 拉起 |
 | `RECYCLE_FACTOR`| `0.9`                       | 回收价系数：回收价 = 中位数 × 系数（0,1]              |
 | `XIANYU_COOKIE` | -                           | `GATEWAY=http` 时的闲鱼登录态 Cookie                  |
 | `DATABASE_PATH` | `data/xianyu.db`            | SQLite 数据库文件路径（目录自动创建）                 |

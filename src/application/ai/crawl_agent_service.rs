@@ -58,6 +58,7 @@ impl CrawlAgentService {
 
     /// 抓取一个商品：跑一轮 AI agent，返回落库的统计结果
     pub async fn crawl_product(&self, product: &Product) -> Result<CrawlOutcome, DomainError> {
+        tracing::debug!("开始为商品 {} 跑 AI 抓取 agent", product.id);
         // 工具执行与 agent 循环在同一线程串行，std Mutex 即可（不在 await 间持锁）
         let outcome: Arc<Mutex<Option<CrawlOutcome>>> = Arc::new(Mutex::new(None));
 
@@ -88,9 +89,19 @@ impl CrawlAgentService {
             product.name.as_str()
         );
 
+        tracing::trace!("AI agent system prompt: {}", system);
+        tracing::trace!("AI agent user prompt: {}", user);
+
         self.ai.run_agent(system, &user, &tools, MAX_ROUNDS).await?;
 
         let taken = outcome.lock().expect("outcome 锁中毒").take();
+        match &taken {
+            Some(o) => tracing::debug!(
+                "商品 {} AI 抓取结束：{} 条，中位数 {:.2}，回收价 {:.2}",
+                product.id, o.count, o.median_price, o.recycle_price
+            ),
+            None => tracing::warn!("商品 {} AI agent 结束后 outcome 仍为空", product.id),
+        }
         taken.ok_or_else(|| {
             DomainError::InvalidState("AI 未提交抓取结果（save_crawl_result 未被调用）".into())
         })
@@ -145,7 +156,9 @@ impl AiTool for XianyuSearchTool {
             .map(str::trim)
             .filter(|k| !k.is_empty())
             .unwrap_or(&self.default_keyword);
+        tracing::debug!("xianyu_search 工具执行：keyword={}", keyword);
         let items = self.gateway.search(keyword, 1).await?;
+        tracing::debug!("xianyu_search 返回 {} 条候选", items.len());
         let list: Vec<JsonValue> = items
             .iter()
             .map(|i| {
@@ -232,6 +245,7 @@ impl AiTool for SaveCrawlResultTool {
             .get("items")
             .and_then(|v| v.as_array())
             .ok_or_else(|| DomainError::InvalidInput("items 必须是数组".into()))?;
+        tracing::debug!("save_crawl_result 工具执行：收到 {} 条待提交", arr.len());
         if arr.is_empty() || arr.len() > MAX_SELECTED {
             return Err(DomainError::InvalidInput(format!(
                 "items 数量需在 1..={MAX_SELECTED} 之间，收到 {}",
@@ -252,11 +266,24 @@ impl AiTool for SaveCrawlResultTool {
                 .trim()
                 .to_string();
             if title.is_empty() || price <= 0.0 || url.is_empty() {
+                tracing::debug!(
+                    "save_crawl_result 第 {} 条数据无效：title='{}' price={} url='{}'",
+                    i + 1,
+                    title,
+                    price,
+                    url
+                );
                 return Err(DomainError::InvalidInput(format!(
                     "第 {} 条数据无效（title/url 不能为空，price 必须 > 0）",
                     i + 1
                 )));
             }
+            tracing::trace!(
+                "save_crawl_result 选中：{} / {:.2} / {}",
+                title,
+                price,
+                url
+            );
             items.push(Item {
                 id: url.to_string(),
                 title: title.to_string(),

@@ -4,6 +4,7 @@
 //! 这是真实爬虫的第一步：不碰 mtop 签名/Cookie，直接用浏览器里已登录的会话。
 //! 抓取流程：navigate 到搜索页 → 等 SPA 渲染 → evaluate JS 提取卡片 → 解析为 Item。
 
+use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -39,6 +40,17 @@ impl WebBridgeClient {
         }
     }
 
+    /// 探测 WebBridge daemon 是否已可响应
+    pub async fn is_running(&self) -> bool {
+        match self.client.get(format!("{}/status", self.base_url)).send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(e) => {
+                tracing::trace!("WebBridge 健康检查失败: {e}");
+                false
+            }
+        }
+    }
+
     /// 发送一条 WebBridge 命令并返回响应 JSON
     async fn command(&self, action: &str, args: JsonValue) -> Result<JsonValue, DomainError> {
         let body = serde_json::json!({
@@ -46,6 +58,7 @@ impl WebBridgeClient {
             "args": args,
             "session": self.session,
         });
+        tracing::trace!("WebBridge 请求: {}", body);
         let resp = self
             .client
             .post(format!("{}/command", self.base_url))
@@ -79,11 +92,13 @@ impl WebBridgeClient {
                 "WebBridge 命令 {action} 失败: {data}"
             )));
         }
+        tracing::trace!("WebBridge 命令 {action} 响应: {data}");
         Ok(data)
     }
 
     /// 在页面里执行 JS，返回其返回值（字符串）
     async fn evaluate_str(&self, code: &str) -> Result<String, DomainError> {
+        tracing::trace!("WebBridge evaluate JS: {}", code);
         let resp = self
             .command("evaluate", serde_json::json!({ "code": code }))
             .await?;
@@ -103,6 +118,7 @@ impl WebBridgeClient {
             "https://www.goofish.com/search?q={}",
             percent_encode(keyword)
         );
+        tracing::debug!("WebBridge 导航到搜索页: {url}");
         self.command(
             "navigate",
             serde_json::json!({ "url": url, "group_title": "闲鱼数据抓取" }),
@@ -111,8 +127,10 @@ impl WebBridgeClient {
 
         // SPA 需要渲染时间；提取为空则重试等待
         for attempt in 1..=LOAD_ATTEMPTS {
+            tracing::debug!("WebBridge 等待渲染（第 {attempt}/{LOAD_ATTEMPTS} 次）");
             tokio::time::sleep(LOAD_WAIT).await;
             let raw = self.evaluate_str(EXTRACT_JS).await?;
+            tracing::trace!("WebBridge 原始提取结果: {raw}");
             let items = parse_listings(&raw);
             if !items.is_empty() {
                 tracing::info!(
@@ -123,10 +141,63 @@ impl WebBridgeClient {
             }
             tracing::debug!("WebBridge 搜索「{keyword}」第 {attempt} 次提取为空，继续等待");
         }
+        tracing::warn!("WebBridge 搜索「{keyword}」{LOAD_ATTEMPTS} 次后仍未提取到商品");
         Err(DomainError::Infrastructure(format!(
             "闲鱼搜索「{keyword}」未提取到商品（页面未渲染完成、未登录或被风控，请检查浏览器标签组「闲鱼数据抓取」中的页面）"
         )))
     }
+}
+
+/// 尝试自动启动 WebBridge daemon。
+/// 如果 daemon 已经在运行则直接返回；否则用 `bin_path start` 拉起，并轮询等待就绪。
+pub async fn launch_webbridge_daemon(bin_path: &str, url: &str) -> Result<(), DomainError> {
+    let probe = WebBridgeClient::new(url);
+    if probe.is_running().await {
+        tracing::info!("WebBridge daemon 已在运行 ({url})");
+        return Ok(());
+    }
+
+    tracing::info!("WebBridge daemon 未响应，尝试从 {bin_path} 启动");
+    let mut child = std::process::Command::new(bin_path)
+        .arg("start")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| DomainError::Infrastructure(format!("启动 WebBridge 失败: {e}")))?;
+
+    // 异步等待 daemon 就绪，最多 30 秒
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(30);
+    let check_interval = Duration::from_millis(500);
+
+    while start.elapsed() < timeout {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(DomainError::Infrastructure(format!(
+                    "WebBridge 进程已退出（code={}），请检查 {bin_path} 是否可执行",
+                    status.code().unwrap_or(-1)
+                )));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(DomainError::Infrastructure(format!(
+                    "等待 WebBridge 进程时出错: {e}"
+                )));
+            }
+        }
+
+        if probe.is_running().await {
+            tracing::info!("WebBridge daemon 启动成功 ({url})");
+            return Ok(());
+        }
+        tokio::time::sleep(check_interval).await;
+    }
+
+    let _ = child.kill();
+    Err(DomainError::Infrastructure(
+        "WebBridge daemon 在 30 秒内未能就绪，请手动检查".into(),
+    ))
 }
 
 /// 让 WebBridgeClient 也能当普通网关用（CrawlService 等旧路径直接拿原始候选）
@@ -140,10 +211,13 @@ impl XianYuGateway for WebBridgeClient {
 /// 解析 evaluate 返回的 JSON 数组为 Item 列表；脏数据（无标题/价格<=0）直接丢弃
 fn parse_listings(raw: &str) -> Vec<Item> {
     let Ok(JsonValue::Array(arr)) = serde_json::from_str::<JsonValue>(raw) else {
+        tracing::trace!("parse_listings 无法解析为 JSON 数组: {raw}");
         return Vec::new();
     };
+    tracing::trace!("parse_listings 原始数组长度: {}", arr.len());
     let now = now_unix();
-    arr.iter()
+    let items: Vec<Item> = arr
+        .iter()
         .filter_map(|v| {
             let title = v.get("title")?.as_str()?.trim().to_string();
             let price = v.get("price")?.as_f64()?;
@@ -168,7 +242,9 @@ fn parse_listings(raw: &str) -> Vec<Item> {
                 product_id: None,
             })
         })
-        .collect()
+        .collect();
+    tracing::trace!("parse_listings 过滤后有效条目: {}/{}", items.len(), arr.len());
+    items
 }
 
 /// 极简百分号编码（非 ASCII 与保留字符 → %XX），避免引入 url crate
