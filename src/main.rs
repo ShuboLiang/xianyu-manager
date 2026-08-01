@@ -19,6 +19,7 @@ use application::product_service::ProductService;
 use application::queue_service::QueueService;
 use application::stats_service::StatsService;
 use application::tag_service::TagService;
+use application::trend_service::TrendService;
 use infrastructure::config::Config;
 use infrastructure::persistence::memory::{
     InMemoryAiClassifyTaskRepository, InMemoryCrawlTaskRepository,
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let item_service = Arc::new(ItemService::new(item_repo.clone()));
     let tag_service = Arc::new(TagService::new(tag_repo.clone()));
     let product_service = Arc::new(ProductService::new(product_repo.clone(), tag_repo.clone()));
+    let trend_service = Arc::new(TrendService::new(item_repo.clone(), product_repo.clone()));
 
     let ai_gateway: Arc<dyn crate::application::ports::AiGateway> = Arc::new(
         crate::infrastructure::ai_gateway::RigAiGateway::new(
@@ -149,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
             ai_tool_call_service,
             classify_service,
             stats_service,
+            trend_service,
         },
         &config.static_dir,
     );

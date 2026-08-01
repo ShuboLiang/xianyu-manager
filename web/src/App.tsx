@@ -4,6 +4,7 @@ import { HashRouter, NavLink, Navigate, Route, Routes } from 'react-router';
 import {
   AlertTriangle,
   Bot,
+  ChartLine,
   Inbox,
   LayoutDashboard,
   Menu,
@@ -27,6 +28,7 @@ import { KpiStrip } from '@/sections/KpiStrip';
 import { ProductsCard } from '@/sections/ProductsCard';
 import { QueuesCard } from '@/sections/QueuesCard';
 import { TagsCard } from '@/sections/TagsCard';
+import { TrendsCard } from '@/sections/TrendsCard';
 import type {
   AiProvider,
   AiStatus,
@@ -59,6 +61,7 @@ const NAV_ITEMS: { to: string; label: string; icon: LucideIcon; end?: boolean }[
   { to: '/products', label: '商品管理', icon: Package },
   { to: '/tags', label: '标签管理', icon: TagsIcon },
   { to: '/items', label: '抓取数据', icon: Inbox },
+  { to: '/trends', label: '价格趋势', icon: ChartLine },
   { to: '/ai', label: 'AI', icon: Bot },
 ];
 
@@ -468,6 +471,7 @@ export default function App() {
                   />
                 }
               />
+              <Route path="/trends" element={<TrendsCard />} />
               <Route
                 path="/ai"
                 element={

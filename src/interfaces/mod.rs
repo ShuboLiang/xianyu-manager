@@ -27,6 +27,7 @@ use crate::application::product_service::ProductService;
 use crate::application::queue_service::QueueService;
 use crate::application::stats_service::StatsService;
 use crate::application::tag_service::TagService;
+use crate::application::trend_service::TrendService;
 
 use dto::ApiResponse;
 
@@ -43,6 +44,7 @@ pub struct AppState {
     pub ai_tool_call_service: Arc<AiToolCallService>,
     pub classify_service: Arc<ClassifyService>,
     pub stats_service: Arc<StatsService>,
+    pub trend_service: Arc<TrendService>,
 }
 
 /// 组装整个应用的路由：
@@ -63,6 +65,7 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
                 .delete(tag_handler::delete_tag),
         )
         .route("/tags/{id}/products", get(tag_handler::tag_products))
+        .route("/products/price-trend", get(product_handler::price_trend))
         .route("/products/export", get(product_handler::export_products))
         .route("/products/batch", post(product_handler::batch_create_products))
         .route(

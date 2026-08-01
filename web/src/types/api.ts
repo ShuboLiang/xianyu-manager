@@ -62,5 +62,7 @@ export type { BatchSkippedItem } from './generated/BatchSkippedItem';
 export type { ClassifyProductsResponse } from './generated/ClassifyProductsResponse';
 export type { EnqueueResponse } from './generated/EnqueueResponse';
 export type { PreviewResponse } from './generated/PreviewResponse';
+export type { PriceTrendPoint } from './generated/PriceTrendPoint';
+export type { PriceTrendSeries } from './generated/PriceTrendSeries';
 export type { ProductBatchCreateResponse } from './generated/ProductBatchCreateResponse';
 export type { TestConnectionResponse } from './generated/TestConnectionResponse';

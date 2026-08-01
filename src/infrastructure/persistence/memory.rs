@@ -77,6 +77,20 @@ impl ItemRepository for InMemoryItemRepository {
         items.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
         Ok(items)
     }
+
+    async fn list_by_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError> {
+        let guard = self
+            .items
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        let mut items: Vec<Item> = guard
+            .iter()
+            .filter(|i| i.product_id == Some(product_id))
+            .cloned()
+            .collect();
+        items.sort_by_key(|i| i.crawled_at);
+        Ok(items)
+    }
 }
 
 #[derive(Default)]

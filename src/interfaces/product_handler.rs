@@ -7,7 +7,8 @@ use axum::response::IntoResponse;
 use crate::domain::product::Product;
 
 use super::dto::{
-    ApiResponse, PageResponse, ProductBatchCreateRequest, ProductBatchCreateResponse,
+    ApiResponse, PageResponse, PriceTrendPoint, PriceTrendQuery, PriceTrendSeries,
+    ProductBatchCreateRequest, ProductBatchCreateResponse,
     ProductCreateRequest, ProductListQuery, ProductResponse, ProductUpdateRequest,
     BatchSkippedItem,
 };
@@ -300,4 +301,25 @@ fn write_opt_datetime(
         sheet.write_number_with_format(row, col, unix_to_excel_date(v), fmt)?;
     }
     Ok(())
+}
+
+/// GET /api/products/price-trend?product_ids=1,2,3：多商品价格趋势数据
+pub async fn price_trend(
+    State(state): State<AppState>,
+    Query(q): Query<PriceTrendQuery>,
+) -> Json<ApiResponse<Vec<PriceTrendSeries>>> {
+    match state.trend_service.compute(&q.product_ids).await {
+        Ok(series) => {
+            let data: Vec<PriceTrendSeries> = series
+                .into_iter()
+                .map(|s| PriceTrendSeries {
+                    product_id: s.product_id,
+                    product_name: s.product_name,
+                    points: s.points.into_iter().map(PriceTrendPoint::from).collect(),
+                })
+                .collect();
+            Json(ApiResponse::ok(data))
+        }
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
 }

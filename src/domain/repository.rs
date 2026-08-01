@@ -62,6 +62,8 @@ pub trait ItemRepository: Send + Sync {
     async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError>;
     /// 某商品最后一轮抓取的明细（同一轮条目共享 crawled_at 作为批次标识）
     async fn list_latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError>;
+    /// 某商品的全部抓取记录，按 crawled_at 升序（价格趋势图用）
+    async fn list_by_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError>;
 }
 
 #[async_trait]

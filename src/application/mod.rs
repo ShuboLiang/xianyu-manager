@@ -10,3 +10,4 @@ pub mod product_service;
 pub mod queue_service;
 pub mod stats_service;
 pub mod tag_service;
+pub mod trend_service;

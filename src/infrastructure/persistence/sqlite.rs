@@ -1026,6 +1026,17 @@ impl ItemRepository for SqliteItemRepository {
         .map_err(to_infra)?;
         Ok(rows.iter().map(row_to_item).collect())
     }
+
+    async fn list_by_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT * FROM items WHERE product_id = ? ORDER BY crawled_at ASC",
+        )
+        .bind(product_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(rows.iter().map(row_to_item).collect())
+    }
 }
 
 fn row_to_item(row: &SqliteRow) -> Item {

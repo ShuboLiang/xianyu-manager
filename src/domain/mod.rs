@@ -5,6 +5,7 @@ pub mod crawl_queue;
 pub mod crawl_task;
 pub mod error;
 pub mod item;
+pub mod price_trend;
 pub mod product;
 pub mod repository;
 pub mod tag;

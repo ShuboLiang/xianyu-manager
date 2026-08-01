@@ -683,3 +683,61 @@ impl From<ClassifyWarning> for ClassifyWarningDto {
         }
     }
 }
+
+// ---------- 价格趋势图 ----------
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct PriceTrendPoint {
+    #[ts(type = "number")]
+    pub crawled_at: u64,
+    pub median_price: f64,
+    pub min_price: f64,
+    pub max_price: f64,
+    pub avg_price: f64,
+    #[ts(type = "number")]
+    pub count: u32,
+}
+
+impl From<crate::domain::price_trend::PriceTrendPoint> for PriceTrendPoint {
+    fn from(p: crate::domain::price_trend::PriceTrendPoint) -> Self {
+        Self {
+            crawled_at: p.crawled_at,
+            median_price: p.median_price,
+            min_price: p.min_price,
+            max_price: p.max_price,
+            avg_price: p.avg_price,
+            count: p.count,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct PriceTrendSeries {
+    #[ts(type = "number")]
+    pub product_id: i64,
+    pub product_name: String,
+    pub points: Vec<PriceTrendPoint>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct PriceTrendQuery {
+    #[serde(default, deserialize_with = "deserialize_comma_separated_i64")]
+    #[ts(type = "Array<number>")]
+    pub product_ids: Vec<i64>,
+}
+
+fn deserialize_comma_separated_i64<'de, D>(deserializer: D) -> Result<Vec<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = String::deserialize(deserializer)?;
+    if s.is_empty() {
+        return Ok(Vec::new());
+    }
+    s.split(',')
+        .map(|part| part.trim().parse::<i64>().map_err(serde::de::Error::custom))
+        .collect()
+}
