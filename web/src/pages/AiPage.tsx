@@ -1,0 +1,541 @@
+import { useEffect, useState } from 'react';
+import {
+  App as AntApp,
+  Alert,
+  Button,
+  Card,
+  Col,
+  Form,
+  Input,
+  InputNumber,
+  Row,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+} from 'antd';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PageHeader } from '@/components/PageHeader';
+import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '@/lib/api';
+import type {
+  AiProvider,
+  AiStatus,
+  AiToolCall,
+  CrawlPrompt,
+  PageResponse,
+  TestConnectionResponse,
+} from '@/types/api';
+
+// 供应商模板：后端统一使用 OpenAI 兼容协议。
+// base_url / model 参考 rig-core 0.41 各 provider 常量与官方 OpenAI 兼容端点文档（2026-07）。
+const AI_PRESETS: Record<string, { name: string; base_url: string; model: string }> = {
+  // 国际主流
+  openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
+  xai: { name: 'xAI (Grok)', base_url: 'https://api.x.ai/v1', model: 'grok-4.3' },
+  groq: { name: 'Groq', base_url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  mistral: { name: 'Mistral AI', base_url: 'https://api.mistral.ai/v1', model: 'mistral-large-3' },
+  together: { name: 'Together AI', base_url: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct' },
+  openrouter: { name: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4.1-mini' },
+  hyperbolic: { name: 'Hyperbolic', base_url: 'https://api.hyperbolic.xyz/v1', model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct' },
+  perplexity: { name: 'Perplexity', base_url: 'https://api.perplexity.ai', model: 'sonar' },
+  gemini: { name: 'Gemini (OpenAI 兼容)', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
+  // 国内主流
+  deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' },
+  moonshot: { name: 'Kimi (Moonshot 国内)', base_url: 'https://api.moonshot.cn/v1', model: 'kimi-k3' },
+  moonshot_global: { name: 'Kimi (Moonshot 国际)', base_url: 'https://api.moonshot.ai/v1', model: 'kimi-k3' },
+  qwen: { name: '通义千问', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3.5-plus' },
+  zhipu: { name: '智谱 AI', base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.5' },
+  siliconflow: { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V4-Flash' },
+  minimax: { name: 'MiniMax', base_url: 'https://api.minimaxi.com/v1', model: 'MiniMax-M3' },
+  // 本地
+  ollama: { name: 'Ollama (本地)', base_url: 'http://localhost:11434/v1', model: 'llama4:scout' },
+  // 自定义
+  custom: { name: '自定义 OpenAI 兼容', base_url: '', model: '' },
+};
+
+interface ProviderFormValues {
+  name: string;
+  base_url: string;
+  api_key?: string;
+  model: string;
+  timeout_secs: number;
+}
+
+// 工具名标签配色：抓取工具蓝、写库工具绿，其余默认
+const TOOL_TAG_COLOR: Record<string, string> = {
+  xianyu_search: 'blue',
+  save_crawl_result: 'green',
+};
+
+/** JSON 美化：能解析则缩进展示，否则原样输出 */
+function prettyJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+export function AiPage() {
+  const { message, modal } = AntApp.useApp();
+  const queryClient = useQueryClient();
+
+  const { data: ai } = useQuery({
+    queryKey: ['ai'],
+    queryFn: async () => {
+      const [providers, status, prompt] = await Promise.all([
+        apiGet<AiProvider[]>('/api/ai/providers'),
+        apiGet<AiStatus>('/api/ai/status'),
+        apiGet<CrawlPrompt>('/api/ai/crawl-prompt'),
+      ]);
+      return { providers, status, prompt: prompt.custom_prompt };
+    },
+  });
+  const providers = ai?.providers ?? [];
+  const status = ai?.status ?? null;
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['ai'] });
+
+  // ---------- 供应商表单 ----------
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [form] = Form.useForm<ProviderFormValues>();
+
+  const applyPreset = (key: string) => {
+    const preset = AI_PRESETS[key];
+    if (!preset) return;
+    form.setFieldsValue({
+      name: preset.name || form.getFieldValue('name'),
+      base_url: preset.base_url,
+      model: preset.model,
+    });
+  };
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    const payload = {
+      name: values.name.trim(),
+      base_url: values.base_url.trim(),
+      api_key: values.api_key?.trim() || null,
+      model: values.model.trim(),
+      timeout_secs: values.timeout_secs || 60,
+    };
+    const isEdit = editingId !== null;
+    try {
+      if (isEdit) {
+        await apiPut(`/api/ai/providers/${editingId}`, payload);
+      } else {
+        await apiPost('/api/ai/providers', payload);
+      }
+      message.success(isEdit ? '已保存修改' : '已添加配置');
+      setEditingId(null);
+      form.resetFields();
+      refresh();
+    } catch (e) {
+      message.error(`${isEdit ? '更新' : '添加'}失败: ${(e as Error).message}`);
+    }
+  };
+
+  const startEdit = async (id: number) => {
+    try {
+      const p = await apiGet<AiProvider>(`/api/ai/providers/${id}`);
+      setEditingId(p.id);
+      form.setFieldsValue({
+        name: p.name,
+        base_url: p.base_url,
+        api_key: undefined, // 密钥不回填，留空表示不修改
+        model: p.model,
+        timeout_secs: p.timeout_secs,
+      });
+    } catch (e) {
+      message.error(`加载配置失败: ${(e as Error).message}`);
+    }
+  };
+
+  const test = async (id: number) => {
+    try {
+      const data = await apiPost<TestConnectionResponse>(`/api/ai/providers/${id}/test`);
+      message.success(`连通正常，耗时 ${data.latency_ms} ms，模型回复：${data.reply}`);
+    } catch (e) {
+      message.error(`测试失败: ${(e as Error).message}`);
+    }
+  };
+
+  const setDefault = async (id: number) => {
+    try {
+      await apiPost(`/api/ai/providers/${id}/default`);
+      refresh();
+    } catch (e) {
+      message.error(`设置默认失败: ${(e as Error).message}`);
+    }
+  };
+
+  const confirmDelete = (p: AiProvider) => {
+    modal.confirm({
+      title: `删除 AI 配置「${p.name}」？`,
+      content: '删除后不可恢复；若该配置为默认，需重新指定默认配置。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await apiDelete(`/api/ai/providers/${p.id}`);
+          if (editingId === p.id) {
+            setEditingId(null);
+            form.resetFields();
+          }
+          message.success('已删除');
+          refresh();
+        } catch (e) {
+          message.error(`删除失败: ${(e as Error).message}`);
+        }
+      },
+    });
+  };
+
+  // ---------- 抓取提示词 ----------
+  const [promptText, setPromptText] = useState('');
+  const [promptSaving, setPromptSaving] = useState(false);
+
+  useEffect(() => {
+    if (ai) setPromptText(ai.prompt);
+  }, [ai]);
+
+  const savePrompt = async () => {
+    setPromptSaving(true);
+    try {
+      await apiPut('/api/ai/crawl-prompt', { custom_prompt: promptText });
+      message.success('抓取提示词已保存，下一轮抓取生效');
+      refresh();
+    } catch (e) {
+      message.error(`保存失败: ${(e as Error).message}`);
+    } finally {
+      setPromptSaving(false);
+    }
+  };
+
+  // ---------- 工具调用记录 ----------
+  const [callsQuery, setCallsQuery] = useState({ page: 1, pageSize: 20 });
+  const { data: toolCalls } = useQuery({
+    queryKey: ['aiCalls', callsQuery],
+    queryFn: () =>
+      apiGet<PageResponse<AiToolCall>>(
+        `/api/ai/tool-calls?page=${callsQuery.page}&page_size=${callsQuery.pageSize}`,
+      ),
+  });
+
+  return (
+    <div>
+      <PageHeader title="AI 配置" description="接口供应商、抓取提示词与工具调用审计" />
+      <Card>
+        <Tabs
+          items={[
+            {
+              key: 'providers',
+              label: '接口配置',
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  {status && !status.configured && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="尚未配置 AI 接口（请在下方添加或设置 AI_API_KEY 环境变量）"
+                    />
+                  )}
+                  <Card size="small" title={editingId !== null ? '编辑配置' : '添加配置'}>
+                    <Form
+                      form={form}
+                      layout="vertical"
+                      initialValues={{ base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', timeout_secs: 60 }}
+                    >
+                      <Row gutter={12}>
+                        <Col xs={24} sm={12} lg={6}>
+                          <Form.Item label="供应商模板" style={{ marginBottom: 12 }}>
+                            <Select
+                              allowClear
+                              placeholder="选择模板自动填充"
+                              onChange={applyPreset}
+                              options={Object.entries(AI_PRESETS).map(([key, preset]) => ({
+                                label: preset.name || key,
+                                value: key,
+                              }))}
+                            />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12} lg={6}>
+                          <Form.Item
+                            name="name"
+                            label="名称"
+                            rules={[{ required: true, message: '必填' }]}
+                            style={{ marginBottom: 12 }}
+                          >
+                            <Input placeholder="如：DeepSeek" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12} lg={8}>
+                          <Form.Item
+                            name="base_url"
+                            label="Base URL"
+                            rules={[{ required: true, message: '必填' }]}
+                            style={{ marginBottom: 12 }}
+                          >
+                            <Input />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12} lg={4}>
+                          <Form.Item name="timeout_secs" label="超时（秒）" style={{ marginBottom: 12 }}>
+                            <InputNumber min={1} style={{ width: '100%' }} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12} lg={10}>
+                          <Form.Item
+                            name="api_key"
+                            label="API Key"
+                            style={{ marginBottom: 12 }}
+                          >
+                            <Input.Password
+                              autoComplete="off"
+                              placeholder={editingId !== null ? '留空不修改' : 'API Key'}
+                            />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12} lg={8}>
+                          <Form.Item
+                            name="model"
+                            label="模型"
+                            rules={[{ required: true, message: '必填' }]}
+                            style={{ marginBottom: 12 }}
+                          >
+                            <Input placeholder="如：gpt-4o-mini" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} lg={6}>
+                          <Form.Item label=" " colon={false} style={{ marginBottom: 12 }}>
+                            <Space>
+                              <Button type="primary" onClick={submit}>
+                                {editingId !== null ? '保存修改' : '添加配置'}
+                              </Button>
+                              {editingId !== null && (
+                                <Button
+                                  onClick={() => {
+                                    setEditingId(null);
+                                    form.resetFields();
+                                  }}
+                                >
+                                  取消编辑
+                                </Button>
+                              )}
+                            </Space>
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    </Form>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。
+                    </Typography.Text>
+                  </Card>
+                  <Table<AiProvider>
+                    rowKey="id"
+                    size="small"
+                    dataSource={providers}
+                    pagination={false}
+                    locale={{ emptyText: '暂无 AI 配置' }}
+                    columns={[
+                      { title: '名称', dataIndex: 'name' },
+                      { title: 'Base URL', dataIndex: 'base_url', ellipsis: true },
+                      { title: '模型', dataIndex: 'model' },
+                      { title: '密钥', dataIndex: 'api_key', render: (v: string | null) => v || '-' },
+                      {
+                        title: '默认',
+                        dataIndex: 'is_default',
+                        width: 80,
+                        render: (v: boolean) => (v ? <Tag color="gold">默认</Tag> : '-'),
+                      },
+                      {
+                        title: '操作',
+                        key: 'actions',
+                        width: 220,
+                        render: (_, p) => (
+                          <Space split={<Typography.Text type="secondary">|</Typography.Text>} size={2}>
+                            <Button type="link" size="small" style={{ padding: 0 }} onClick={() => startEdit(p.id)}>
+                              编辑
+                            </Button>
+                            <Button type="link" size="small" style={{ padding: 0 }} onClick={() => test(p.id)}>
+                              测试
+                            </Button>
+                            {!p.is_default && (
+                              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setDefault(p.id)}>
+                                设为默认
+                              </Button>
+                            )}
+                            <Button type="link" size="small" danger style={{ padding: 0 }} onClick={() => confirmDelete(p)}>
+                              删除
+                            </Button>
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                </Space>
+              ),
+            },
+            {
+              key: 'prompt',
+              label: '抓取提示词',
+              children: (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="自定义 AI 抓取时的筛选与定价规则，保存后下一轮抓取生效（无需重启）。"
+                    description="定价规则以折扣系数表达时（如「打八折」），AI 会按系数计算该商品的回收价（回收价 = 中位数 × 系数）；未匹配到规则的商品使用默认系数。"
+                  />
+                  <Input.TextArea
+                    autoSize={{ minRows: 5, maxRows: 14 }}
+                    maxLength={2000}
+                    showCount
+                    placeholder={
+                      '例：CPU 类商品回收价打九折（0.9），显示器类打八折（0.8）；\n求购帖、配件帖一律不选；只选个人卖家。'
+                    }
+                    value={promptText}
+                    onChange={(e) => setPromptText(e.target.value)}
+                  />
+                  <Space>
+                    <Button type="primary" loading={promptSaving} onClick={savePrompt}>
+                      保存提示词
+                    </Button>
+                    <Button
+                      type="link"
+                      style={{ padding: 0 }}
+                      onClick={() =>
+                        setPromptText(
+                          'CPU 类商品回收价打九折（0.9），显示器类打八折（0.8）；\n求购帖、配件帖一律不选；只选个人卖家。',
+                        )
+                      }
+                    >
+                      填入示例
+                    </Button>
+                  </Space>
+                </Space>
+              ),
+            },
+            {
+              key: 'calls',
+              label: `调用记录（${toolCalls?.total ?? 0}）`,
+              children: (
+                <Table<AiToolCall>
+                  rowKey="id"
+                  size="small"
+                  dataSource={toolCalls?.items ?? []}
+                  locale={{ emptyText: '暂无工具调用记录' }}
+                  expandable={{
+                    // 展开行：格式化后的完整参数 JSON 与完整结果/错误
+                    expandedRowRender: (c) => (
+                      <div style={{ display: 'grid', gap: 10, padding: '4px 0' }}>
+                        <div>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            参数
+                          </Typography.Text>
+                          <pre className="num" style={{ margin: '4px 0 0', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                            {prettyJson(c.arguments)}
+                          </pre>
+                        </div>
+                        {c.result && (
+                          <div>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              结果
+                            </Typography.Text>
+                            <pre className="num" style={{ margin: '4px 0 0', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                              {prettyJson(c.result)}
+                            </pre>
+                          </div>
+                        )}
+                        {c.error && (
+                          <div>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              错误
+                            </Typography.Text>
+                            <div style={{ marginTop: 4 }}>
+                              <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                                {c.error}
+                              </Typography.Text>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  }}
+                  columns={[
+                    {
+                      title: '时间',
+                      dataIndex: 'created_at',
+                      width: 165,
+                      render: (v: number) => (
+                        <span className="num" style={{ fontSize: 12 }}>
+                          {fmtTime(v)}
+                        </span>
+                      ),
+                    },
+                    {
+                      title: '工具',
+                      dataIndex: 'tool_name',
+                      width: 170,
+                      render: (v: string) => (
+                        <Tag color={TOOL_TAG_COLOR[v] ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                          {v}
+                        </Tag>
+                      ),
+                    },
+                    {
+                      title: '参数',
+                      dataIndex: 'arguments',
+                      ellipsis: true,
+                      render: (v: string) => (
+                        <span className="num" style={{ fontSize: 12, opacity: 0.75 }}>
+                          {v}
+                        </span>
+                      ),
+                    },
+                    {
+                      title: '结果',
+                      key: 'result',
+                      width: 90,
+                      render: (_, c) =>
+                        c.result ? (
+                          <Tag color="success" style={{ marginInlineEnd: 0 }}>成功</Tag>
+                        ) : c.error ? (
+                          <Tag color="error" style={{ marginInlineEnd: 0 }}>失败</Tag>
+                        ) : (
+                          '-'
+                        ),
+                    },
+                    {
+                      title: '耗时',
+                      dataIndex: 'duration_ms',
+                      width: 90,
+                      align: 'right',
+                      render: (v: number) => (
+                        <span className="num">{v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${v} ms`}</span>
+                      ),
+                    },
+                  ]}
+                  onChange={(pagination) =>
+                    setCallsQuery({ page: pagination.current ?? 1, pageSize: pagination.pageSize ?? 20 })
+                  }
+                  pagination={{
+                    current: callsQuery.page,
+                    pageSize: callsQuery.pageSize,
+                    total: toolCalls?.total ?? 0,
+                    showSizeChanger: true,
+                    showTotal: (t) => `共 ${t} 条`,
+                  }}
+                />
+              ),
+            },
+          ]}
+        />
+      </Card>
+    </div>
+  );
+}

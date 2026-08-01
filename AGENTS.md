@@ -83,18 +83,25 @@ src/
         ├── memory.rs    #   内存仓储：抓取任务、AI 分类任务（重启即失）；ItemRepository 内存实现保留为备选
         └── sqlite.rs    #   SQLite 仓储：抓取商品数据、标签、待爬取商品、抓取队列+条目、AI 配置与审计、app_settings KV 设置（共享连接池，启动自动建表）
 static/                  # 前端构建产物（由 web/ 执行 npm run build 生成，axum 托管，勿手改）
-web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + shadcn/ui
+web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @tanstack/react-query
 ├── src/types/generated/ #   ts-rs 从 dto.rs 自动生成的类型（cargo test export_bindings，勿手改）
 ├── src/types/api.ts     #   类型的友好别名 re-export + 手写 ApiResponse<T> 包装
-├── src/lib/api.ts       #   fetch 封装：解包 ApiResponse<T>，code!==0 抛错
-└── src/sections/        #   页面区块：KpiStrip（概览条）/ QueuesCard / ProductsCard / TagsCard / ItemsCard / AiCard + Pager（通用分页条）+ SkeletonRows（共享骨架行）
+├── src/lib/api.ts       #   fetch 封装：解包 ApiResponse<T>，code!==0 抛错；fmtPrice/fmtTime 格式化
+├── src/lib/queries.ts   #   全局共享数据的 react-query hooks（tags/queues/stats/health；queues 自动 2s 轮询）
+├── src/lib/queue.tsx    #   QueueContext：队列状态 + 入队/追加/间隔，AppShell 提供实现，任意页面可用
+├── src/AppShell.tsx     #   布局壳：Layout.Sider 导航 + Header（队列状态指示/健康徽标/主题切换）+ Outlet
+├── src/components/      #   共享小组件（PageHeader 页头）
+└── src/pages/           #   六个页面：OverviewPage（KPI + QueuesPanel）/ ProductsPage / TagsPage / ItemsPage / TrendsPage / AiPage
 ```
 
 前端约定：
 
-- `web/vite.config.ts`：dev 端口 5173（避让后端 3000），`/api` 代理到 `127.0.0.1:3000`；`build.outDir` 指向 `../static` 且 `emptyOutDir`，构建即覆盖旧产物。
-- 前端用 `react-router` 的 **HashRouter**（避免 axum 静态托管需要路由回退）+ 左侧固定导航（移动端为 Sheet 抽屉）：五个页面 = 概览（KpiStrip + QueuesCard）/ 商品管理 / 标签管理 / 抓取数据 / AI。全局状态仍在 `App.tsx` 集中管理，路由页面只是视图，切页不打断队列轮询；通知用 sonner toast。
-- 队列轮询逻辑在 `App.tsx::loadQueues`：有 waiting/running 队列时每 2 秒自刷新，刚全部结束时补刷商品统计与原始数据。
+- `web/vite.config.ts`：dev 端口 5173（避让后端 3000），`/api` 代理到 `127.0.0.1:3000`；`build.outDir` 指向 `../static` 且 `emptyOutDir`，构建即覆盖旧产物；antd/recharts/react 经 `manualChunks` 独立分包。
+- **UI 体系是 antd v5，不再使用 Tailwind/shadcn**（2026-08 重写）：主题 token 集中在 `App.tsx` 的 `ConfigProvider`（琥珀主色 `#d97706` 延续闲鱼黄、全局 `compactAlgorithm` 紧凑密度、dark/light `algorithm` 切换）；深浅色状态在 `lib/theme-mode.ts`（localStorage 持久化）；样式优先用 antd 组件与 token，少量自定义样式写 `src/index.css`（如 `.num` 等宽数字字体）。反馈一律走 `AntApp.useApp()` 的 `message`/`modal`（不用 antd 静态函数）。
+- 前端用 `react-router` 的 **HashRouter**（避免 axum 静态托管需要路由回退）：六个页面 = 概览（KPI + 队列）/ 商品管理 / 标签管理 / 抓取数据 / 价格趋势 / AI 配置，路由声明在 `App.tsx`，布局壳是 `AppShell.tsx`（antd Layout：Sider 导航 + 48px Header）。Header 常驻队列运行指示（运行中队列进度/排队数），任何页面可感知系统在跑。
+- **服务端状态一律走 @tanstack/react-query**，不再在 `App.tsx` 手写 useState+useEffect 加载：共享数据 hooks 在 `lib/queries.ts`；页面级分页查询（products/items/aiCalls）以查询条件对象作 queryKey 定义在各页面内（`placeholderData: keepPreviousData` 防翻页闪烁）；变更操作后 `invalidateQueries` 对应 key。
+- 队列轮询逻辑在 `lib/queries.ts::useQueues`：有 waiting/running 队列时 `refetchInterval` 2 秒自刷新；刚全部结束的判定在 `AppShell.tsx`（useEffect 比对前后状态），届时补刷 products/items/stats 三个 queryKey。
+- 跨页面的队列操作（商品页入队、概览页追加条目、appendTarget/intervalSecs 共享状态）走 `lib/queue.tsx` 的 `QueueContext`，由 `AppShell` 提供实现（含入队成功/失败的 message 提示与 queues 失效）。
 - **前后端类型自动同步（ts-rs）**：`interfaces/dto.rs` 的 DTO 全部 `#[derive(TS)]` + `#[ts(export)]`，运行 `cargo test export_bindings` 会把 TS 类型写入 `web/src/types/generated/`（导出目录配置在 `.cargo/config.toml` 的 `TS_RS_EXPORT_DIR`）。前端 `web/src/types/api.ts` 只做别名 re-export（`TagResponse`→`Tag` 等）与 `ApiResponse<T>` 手写包装，**不再手工维护字段**。改 dto.rs 后必须重跑导出 + `npm run build`。
   - 新增 DTO 的 `i64`/`u64`/`Vec<i64>` 字段必须标 `#[ts(type = "number")]` / `#[ts(type = "Array<number>")]`（ts-rs 默认映射 bigint，与 JSON 实际序列化不符）。
   - `ApiResponse<T>` 泛型不经 ts-rs 导出；`QueueResponse.status` 在 Rust 是 `String`，前端 `api.ts` 里收窄为 `QueueStatus` 联合类型。

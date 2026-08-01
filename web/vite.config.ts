@@ -21,6 +21,16 @@ export default defineConfig({
     // 构建产物直接输出到 axum 托管的 static/（STATIC_DIR 默认值）
     outDir: '../static',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // 大依赖独立分包，利用浏览器长缓存
+        manualChunks: {
+          antd: ['antd', '@ant-design/icons'],
+          charts: ['recharts'],
+          react: ['react', 'react-dom', 'react-router'],
+        },
+      },
+    },
   },
   resolve: {
     alias: {
