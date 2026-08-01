@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowDown, ArrowUp, ArrowUpDown, Check, Package, Pencil, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, Download, Package, Pencil, X } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -258,6 +258,22 @@ export function ProductsCard({
     if (ok) setCheckedIds(new Set());
   };
 
+  const exportExcel = async () => {
+    try {
+      const res = await fetch('/api/products/export');
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'products.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(`导出失败: ${(e as Error).message}`);
+    }
+  };
+
   // ---------- 批量导入 ----------
 
   const submitBatch = async () => {
@@ -403,6 +419,10 @@ export function ProductsCard({
           </Button>
           <Button variant="secondary" onClick={crawlSelected}>
             选中加入队列
+          </Button>
+          <Button variant="secondary" onClick={exportExcel}>
+            <Download className="mr-1 h-4 w-4" />
+            导出Excel
           </Button>
         </div>
 

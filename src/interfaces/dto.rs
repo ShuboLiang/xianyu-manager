@@ -70,6 +70,9 @@ pub struct ItemResponse {
     pub url: String,
     #[ts(type = "number")]
     pub crawled_at: u64,
+    #[ts(type = "number | null")]
+    pub product_id: Option<i64>,
+    pub product_name: Option<String>,
 }
 
 impl From<Item> for ItemResponse {
@@ -81,6 +84,8 @@ impl From<Item> for ItemResponse {
             seller: it.seller,
             url: it.url,
             crawled_at: it.crawled_at,
+            product_id: it.product_id,
+            product_name: None,
         }
     }
 }

@@ -63,6 +63,7 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
                 .delete(tag_handler::delete_tag),
         )
         .route("/tags/{id}/products", get(tag_handler::tag_products))
+        .route("/products/export", get(product_handler::export_products))
         .route("/products/batch", post(product_handler::batch_create_products))
         .route(
             "/products",

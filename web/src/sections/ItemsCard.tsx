@@ -43,7 +43,7 @@ export function ItemsCard({ items, total, page, pageSize, loading, onPageChange,
         {loading ? (
           <Table>
             <TableBody>
-              <SkeletonRows cols={5} rows={4} />
+              <SkeletonRows cols={6} rows={4} />
             </TableBody>
           </Table>
         ) : items.length === 0 ? (
@@ -68,6 +68,7 @@ export function ItemsCard({ items, total, page, pageSize, loading, onPageChange,
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>商品名</TableHead>
                   <TableHead>标题</TableHead>
                   <TableHead>价格</TableHead>
                   <TableHead>卖家</TableHead>
@@ -78,7 +79,11 @@ export function ItemsCard({ items, total, page, pageSize, loading, onPageChange,
               <TableBody>
                 {items.map((it) => (
                   <TableRow key={it.id}>
-                    {/* 标题单行截断，悬浮显示全文，避免长标题挤占其他列 */}
+                    <TableCell className="max-w-32">
+                      <span className="block truncate" title={it.product_name ?? undefined}>
+                        {it.product_name || '-'}
+                      </span>
+                    </TableCell>
                     <TableCell className="max-w-64">
                       <span className="block truncate" title={it.title}>
                         {it.title}

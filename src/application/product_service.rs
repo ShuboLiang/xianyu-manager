@@ -146,6 +146,11 @@ impl ProductService {
             .await
     }
 
+    /// 导出全部商品（不分页，用于 Excel 导出）
+    pub async fn list_all(&self) -> Result<Vec<Product>, DomainError> {
+        self.products.list().await
+    }
+
     /// 使用某个标签的全部商品（删除标签前的影响提示）
     pub async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError> {
         self.products.list_by_tag(tag_id).await

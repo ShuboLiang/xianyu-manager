@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use axum::extract::{Json, Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::IntoResponse;
 
 use crate::domain::product::Product;
 
@@ -100,13 +102,21 @@ pub async fn latest_product_items(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<Vec<super::dto::ItemResponse>>> {
-    // 商品不存在 → 404 语义；存在但还没抓过 → 空数组
-    if let Err(e) = state.product_service.get_product(id).await {
-        return Json(ApiResponse::err(e.to_string()));
-    }
+    let product = match state.product_service.get_product(id).await {
+        Ok(p) => p,
+        Err(e) => return Json(ApiResponse::err(e.to_string())),
+    };
+    let product_name = product.name.as_str().to_string();
     match state.item_service.latest_for_product(id).await {
         Ok(items) => Json(ApiResponse::ok(
-            items.into_iter().map(super::dto::ItemResponse::from).collect(),
+            items
+                .into_iter()
+                .map(|it| {
+                    let mut resp: super::dto::ItemResponse = it.into();
+                    resp.product_name = Some(product_name.clone());
+                    resp
+                })
+                .collect(),
         )),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
@@ -173,4 +183,121 @@ pub async fn batch_create_products(
         }
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
+}
+
+/// GET /api/products/export：导出全部商品为 Excel 文件
+pub async fn export_products(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let tag_names = tag_name_map(&state).await;
+
+    let products = match state.product_service.list_all().await {
+        Ok(p) => p,
+        Err(e) => {
+            return axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(axum::body::Body::from(e.to_string()))
+                .unwrap()
+        }
+    };
+
+    let buf = match build_excel(&products, &tag_names) {
+        Ok(b) => b,
+        Err(e) => {
+            return axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(axum::body::Body::from(format!("生成 Excel 失败: {e}")))
+                .unwrap()
+        }
+    };
+
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        .header(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"products.xlsx\"",
+        )
+        .body(axum::body::Body::from(buf))
+        .unwrap()
+}
+
+fn build_excel(
+    products: &[Product],
+    tag_names: &HashMap<i64, String>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use rust_xlsxwriter::*;
+
+    let mut workbook = Workbook::new();
+    let mut sheet = workbook.add_worksheet();
+
+    let header_fmt = Format::new().set_bold().set_background_color(Color::RGB(0xD9E2F3));
+    let date_fmt = Format::new().set_num_format("yyyy-mm-dd hh:mm:ss");
+    let headers = [
+        "ID", "商品名", "标签", "备注", "中位数价格", "均价", "爬取数量",
+        "最后爬取时间", "回收价格", "创建时间", "更新时间",
+    ];
+    for (col, h) in headers.iter().enumerate() {
+        sheet.write_string_with_format(0, col as u16, *h, &header_fmt)?;
+    }
+
+    for (row, p) in products.iter().enumerate() {
+        let r = row as u32 + 1;
+        sheet.write_number(r, 0, p.id as f64)?;
+        sheet.write_string(r, 1, p.name.as_str())?;
+        let tags: Vec<&str> = p.tag_ids.iter()
+            .filter_map(|id| tag_names.get(id).map(|s| s.as_str()))
+            .collect();
+        sheet.write_string(r, 2, &tags.join("、"))?;
+        sheet.write_string(r, 3, p.remark.as_deref().unwrap_or(""))?;
+        write_opt_number(&mut sheet, r, 4, p.median_price)?;
+        write_opt_number(&mut sheet, r, 5, p.avg_price)?;
+        if let Some(v) = p.crawled_count {
+            sheet.write_number(r, 6, v as f64)?;
+        }
+        write_opt_datetime(&mut sheet, r, 7, p.last_crawled_at, &date_fmt)?;
+        write_opt_number(&mut sheet, r, 8, p.recycle_price)?;
+        write_opt_datetime(&mut sheet, r, 9, Some(p.created_at), &date_fmt)?;
+        write_opt_datetime(&mut sheet, r, 10, Some(p.updated_at), &date_fmt)?;
+    }
+
+    for col in 0..headers.len() as u16 {
+        sheet.set_column_width(col, 16)?;
+    }
+
+    workbook.save_to_buffer().map_err(|e| e.into())
+}
+
+fn unix_to_excel_date(ts: u64) -> f64 {
+    ts as f64 / 86400.0 + 25569.0
+}
+
+fn write_opt_number(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    row: u32,
+    col: u16,
+    value: Option<f64>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(v) = value {
+        sheet.write_number(row, col, v)?;
+    }
+    Ok(())
+}
+
+fn write_opt_datetime(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    row: u32,
+    col: u16,
+    value: Option<u64>,
+    fmt: &rust_xlsxwriter::Format,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(v) = value {
+        sheet.write_number_with_format(row, col, unix_to_excel_date(v), fmt)?;
+    }
+    Ok(())
 }
