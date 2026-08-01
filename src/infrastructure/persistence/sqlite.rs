@@ -996,18 +996,42 @@ impl ItemRepository for SqliteItemRepository {
         Ok(())
     }
 
-    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError> {
-        let rows = sqlx::query(
-            "SELECT * FROM items ORDER BY crawled_at DESC, id ASC LIMIT ? OFFSET ?",
-        )
-        .bind(limit as i64)
-        .bind(offset as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(to_infra)?;
+    async fn list_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+        search: Option<&str>,
+    ) -> Result<Page<Item>, DomainError> {
+        let (join_clause, where_clause, count_sql) = match search {
+            Some(q) => {
+                let w = format!("WHERE i.title LIKE '%{q}%' OR p.name LIKE '%{q}%'");
+                let c = format!(
+                    "SELECT COUNT(*) AS c FROM items i LEFT JOIN products p ON i.product_id = p.id {w}"
+                );
+                (
+                    "LEFT JOIN products p ON i.product_id = p.id".to_string(),
+                    w,
+                    c,
+                )
+            }
+            None => (
+                String::new(),
+                String::new(),
+                "SELECT COUNT(*) AS c FROM items".to_string(),
+            ),
+        };
+        let sql = format!(
+            "SELECT i.* FROM items i {join_clause} {where_clause} ORDER BY i.crawled_at DESC, i.id ASC LIMIT ? OFFSET ?"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
         let items = rows.iter().map(row_to_item).collect();
 
-        let count_row = sqlx::query("SELECT COUNT(*) AS c FROM items")
+        let count_row = sqlx::query(&count_sql)
             .fetch_one(&self.pool)
             .await
             .map_err(to_infra)?;
@@ -1128,14 +1152,14 @@ mod item_repo_tests {
         // 同 id 再抓：覆盖而不是新增
         repo.save_all(&[sample("a", 150.0, now)]).await.unwrap();
 
-        let page = repo.list_paginated(0, 10).await.unwrap();
+        let page = repo.list_paginated(0, 10, None).await.unwrap();
         assert_eq!(page.total, 2);
         assert_eq!(page.items.len(), 2);
         // 按抓取时间倒序：a（刚刷新）在最前
         assert_eq!(page.items[0].id, "a");
         assert_eq!(page.items[0].price, 150.0);
 
-        let page = repo.list_paginated(1, 1).await.unwrap();
+        let page = repo.list_paginated(1, 1, None).await.unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, "b");
 

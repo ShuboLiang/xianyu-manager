@@ -1,4 +1,5 @@
-import { Inbox } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Inbox, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -9,6 +10,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -23,21 +25,67 @@ import { SkeletonRows } from '@/sections/SkeletonRows';
 import type { Item } from '@/types/api';
 
 interface Props {
-  items: Item[]; // 当前页数据（服务端分页）
+  items: Item[];
   total: number;
   page: number;
   pageSize: number;
+  search: string;
   loading?: boolean;
   onPageChange: (page: number, pageSize: number) => void;
+  onSearchChange: (search: string) => void;
   onRefresh: () => void;
 }
 
-export function ItemsCard({ items, total, page, pageSize, loading, onPageChange, onRefresh }: Props) {
+export function ItemsCard({
+  items,
+  total,
+  page,
+  pageSize,
+  search,
+  loading,
+  onPageChange,
+  onSearchChange,
+  onRefresh,
+}: Props) {
+  const [localSearch, setLocalSearch] = useState(search);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setLocalSearch(search);
+  }, [search]);
+
+  const handleSearchChange = (value: string) => {
+    setLocalSearch(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      onSearchChange(value.trim());
+    }, 300);
+  };
+
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
         <CardTitle>商品列表（已抓取的原始数据）</CardTitle>
-        <Button onClick={onRefresh}>刷新列表</Button>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="w-44 pl-8"
+              placeholder="搜索标题/商品名..."
+              value={localSearch}
+              onChange={(e) => handleSearchChange(e.target.value)}
+            />
+            {localSearch && (
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => handleSearchChange('')}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <Button onClick={onRefresh}>刷新列表</Button>
+        </div>
       </CardHeader>
       <CardContent>
         {loading ? (
@@ -52,9 +100,11 @@ export function ItemsCard({ items, total, page, pageSize, loading, onPageChange,
               <EmptyMedia variant="icon">
                 <Inbox />
               </EmptyMedia>
-              <EmptyTitle>暂无抓取数据</EmptyTitle>
+              <EmptyTitle>{search ? '无匹配结果' : '暂无抓取数据'}</EmptyTitle>
               <EmptyDescription>
-                队列执行后，抓到的原始数据会出现在这里。可以点右上角「刷新列表」手动拉取。
+                {search
+                  ? '未找到匹配的商品名或标题，请尝试其他关键词。'
+                  : '队列执行后，抓到的原始数据会出现在这里。可以点右上角「刷新列表」手动拉取。'}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>

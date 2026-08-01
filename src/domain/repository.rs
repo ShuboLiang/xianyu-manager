@@ -56,8 +56,13 @@ impl ProductSortColumn {
 #[async_trait]
 pub trait ItemRepository: Send + Sync {
     async fn save_all(&self, items: &[Item]) -> Result<(), DomainError>;
-    /// 按抓取时间倒序分页
-    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError>;
+    /// 按抓取时间倒序分页；search 为可选模糊匹配（标题/商品名）
+    async fn list_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+        search: Option<&str>,
+    ) -> Result<Page<Item>, DomainError>;
     /// 指定时间戳以来的抓取数量（KPI「24h 抓取」用）
     async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError>;
     /// 某商品最后一轮抓取的明细（同一轮条目共享 crawled_at 作为批次标识）

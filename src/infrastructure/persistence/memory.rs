@@ -32,12 +32,19 @@ impl ItemRepository for InMemoryItemRepository {
         Ok(())
     }
 
-    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<Item>, DomainError> {
+    async fn list_paginated(&self, offset: u64, limit: u64, search: Option<&str>) -> Result<Page<Item>, DomainError> {
         let guard = self
             .items
             .lock()
             .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
-        let mut all = guard.clone();
+        let mut all: Vec<Item> = match search {
+            Some(q) => guard
+                .iter()
+                .filter(|i| i.title.contains(q) || i.product_id.is_some_and(|_| false))
+                .cloned()
+                .collect(),
+            None => guard.clone(),
+        };
         all.sort_by(|a, b| b.crawled_at.cmp(&a.crawled_at));
         let total = all.len() as u64;
         let items = all

@@ -501,6 +501,18 @@ pub struct PageQuery {
     pub page_size: Option<u64>,
 }
 
+/// 抓取数据列表查询参数：分页 + 商品名/标题模糊搜索
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ItemListQuery {
+    #[ts(type = "number | null")]
+    pub page: Option<u64>,
+    #[ts(type = "number | null")]
+    pub page_size: Option<u64>,
+    /// 标题或商品名模糊搜索
+    pub search: Option<String>,
+}
+
 /// 商品列表查询参数：分页 + 服务端排序
 #[derive(Debug, Deserialize, TS)]
 #[ts(export)]

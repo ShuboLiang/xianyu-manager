@@ -48,6 +48,7 @@ import type {
 interface PageQuery {
   page: number;
   pageSize: number;
+  search: string;
 }
 
 interface ProductsQuery extends PageQuery {
@@ -91,14 +92,14 @@ export default function App() {
     page: 1,
     page_size: 20,
   });
-  const [itemsQuery, setItemsQuery] = useState<PageQuery>({ page: 1, pageSize: 20 });
+  const [itemsQuery, setItemsQuery] = useState<PageQuery>({ page: 1, pageSize: 20, search: '' });
   const [itemsPage, setItemsPage] = useState<PageResponse<Item>>({
     items: [],
     total: 0,
     page: 1,
     page_size: 20,
   });
-  const [aiCallsQuery, setAiCallsQuery] = useState<PageQuery>({ page: 1, pageSize: 20 });
+  const [aiCallsQuery, setAiCallsQuery] = useState<PageQuery>({ page: 1, pageSize: 20, search: '' });
   const [aiCallsPage, setAiCallsPage] = useState<PageResponse<AiToolCall>>({
     items: [],
     total: 0,
@@ -143,8 +144,10 @@ export default function App() {
 
   const loadItems = useCallback(
     async (q: PageQuery = itemsQuery) => {
+      const params = new URLSearchParams({ page: String(q.page), page_size: String(q.pageSize) });
+      if (q.search) params.set('search', q.search);
       try {
-        setItemsPage(await apiGet<PageResponse<Item>>(`/api/items?page=${q.page}&page_size=${q.pageSize}`));
+        setItemsPage(await apiGet<PageResponse<Item>>(`/api/items?${params}`));
       } catch {
         /* ignore */
       }
@@ -205,20 +208,29 @@ export default function App() {
 
   const changeItemsPage = useCallback(
     (page: number, pageSize: number) => {
-      const q = { page, pageSize };
+      const q = { ...itemsQuery, page, pageSize };
       setItemsQuery(q);
       loadItems(q);
     },
-    [loadItems],
+    [itemsQuery, loadItems],
+  );
+
+  const changeItemsSearch = useCallback(
+    (search: string) => {
+      const q: PageQuery = { ...itemsQuery, page: 1, search };
+      setItemsQuery(q);
+      loadItems(q);
+    },
+    [itemsQuery, loadItems],
   );
 
   const changeAiCallsPage = useCallback(
     (page: number, pageSize: number) => {
-      const q = { page, pageSize };
+      const q = { ...aiCallsQuery, page, pageSize };
       setAiCallsQuery(q);
       loadAiCalls(q);
     },
-    [loadAiCalls],
+    [aiCallsQuery, loadAiCalls],
   );
 
   const loadQueues = useCallback(async () => {
@@ -481,8 +493,10 @@ export default function App() {
                     total={itemsPage.total}
                     page={itemsQuery.page}
                     pageSize={itemsQuery.pageSize}
+                    search={itemsQuery.search}
                     loading={loading}
                     onPageChange={changeItemsPage}
+                    onSearchChange={changeItemsSearch}
                     onRefresh={loadItems}
                   />
                 }
