@@ -403,9 +403,9 @@ impl ProductRepository for SqliteProductRepository {
         offset: u64,
         limit: u64,
         sort: Option<(ProductSortColumn, bool)>,
+        search: Option<&str>,
     ) -> Result<Page<Product>, DomainError> {
         let order_by = match sort {
-            // 空值列永远沉底：(col IS NULL) 排最前键；同值按 id 稳定次序
             Some((col, desc)) => format!(
                 "ORDER BY ({col} IS NULL) ASC, {col} {dir}, p.id ASC",
                 col = col.as_sql(),
@@ -413,7 +413,17 @@ impl ProductRepository for SqliteProductRepository {
             ),
             None => "ORDER BY p.created_at ASC".to_string(),
         };
-        let rows = sqlx::query(&format!("{PRODUCT_SELECT} {order_by} LIMIT ? OFFSET ?"))
+        let (where_clause, count_sql) = match search {
+            Some(q) => {
+                let w = format!("WHERE p.name LIKE '%{q}%'");
+                let c = format!("SELECT COUNT(*) AS c FROM products p {w}");
+                (w, c)
+            }
+            None => (String::new(), "SELECT COUNT(*) AS c FROM products".to_string()),
+        };
+        let rows = sqlx::query(&format!(
+            "{PRODUCT_SELECT} {where_clause} {order_by} LIMIT ? OFFSET ?"
+        ))
             .bind(limit as i64)
             .bind(offset as i64)
             .fetch_all(&self.pool)
@@ -423,7 +433,11 @@ impl ProductRepository for SqliteProductRepository {
             .iter()
             .map(row_to_product)
             .collect::<Result<Vec<_>, _>>()?;
-        let total = self.count().await?;
+        let count_row = sqlx::query(&count_sql)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        let total = count_row.get::<i64, _>("c") as u64;
         Ok(Page { items, total })
     }
 

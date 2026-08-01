@@ -513,6 +513,8 @@ pub struct ProductListQuery {
     pub sort_by: Option<String>,
     /// asc / desc（默认 desc）
     pub sort_dir: Option<String>,
+    /// 商品名模糊搜索
+    pub search: Option<String>,
 }
 
 /// 分页响应（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）

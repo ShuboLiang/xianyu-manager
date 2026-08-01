@@ -11,4 +11,8 @@ sort_by: string | null,
 /**
  * asc / desc（默认 desc）
  */
-sort_dir: string | null, };
+sort_dir: string | null, 
+/**
+ * 商品名模糊搜索
+ */
+search: string | null, };

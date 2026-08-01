@@ -53,6 +53,7 @@ interface PageQuery {
 interface ProductsQuery extends PageQuery {
   sortBy: string | null;
   sortDir: 'asc' | 'desc';
+  search: string;
 }
 
 // 侧边导航：概览（监控）/ 商品 / 标签 / 数据 / AI（低频配置）
@@ -82,6 +83,7 @@ export default function App() {
     pageSize: 20,
     sortBy: null,
     sortDir: 'desc',
+    search: '',
   });
   const [productsPage, setProductsPage] = useState<PageResponse<Product>>({
     items: [],
@@ -126,6 +128,9 @@ export default function App() {
       if (q.sortBy) {
         params.set('sort_by', q.sortBy);
         params.set('sort_dir', q.sortDir);
+      }
+      if (q.search) {
+        params.set('search', q.search);
       }
       try {
         setProductsPage(await apiGet<PageResponse<Product>>(`/api/products?${params}`));
@@ -183,6 +188,15 @@ export default function App() {
       const sortDir =
         productsQuery.sortBy === sortBy && productsQuery.sortDir === 'desc' ? 'asc' : 'desc';
       const q: ProductsQuery = { ...productsQuery, page: 1, sortBy, sortDir };
+      setProductsQuery(q);
+      loadProducts(q);
+    },
+    [productsQuery, loadProducts],
+  );
+
+  const changeProductsSearch = useCallback(
+    (search: string) => {
+      const q: ProductsQuery = { ...productsQuery, page: 1, search };
       setProductsQuery(q);
       loadProducts(q);
     },
@@ -446,10 +460,12 @@ export default function App() {
                     pageSize={productsQuery.pageSize}
                     sortBy={productsQuery.sortBy}
                     sortDir={productsQuery.sortDir}
+                    search={productsQuery.search}
                     tags={tags}
                     loading={loading}
                     onPageChange={changeProductsPage}
                     onSortChange={changeProductsSort}
+                    onSearchChange={changeProductsSearch}
                     onRefresh={loadProducts}
                     onRefreshAiCalls={loadAiCalls}
                     onEnqueueProducts={enqueueProducts}

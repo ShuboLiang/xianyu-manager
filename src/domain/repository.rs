@@ -95,12 +95,13 @@ pub trait ProductRepository: Send + Sync {
     async fn count(&self) -> Result<u64, DomainError>;
     /// 全部商品中最近的爬取时间（KPI 用）
     async fn max_last_crawled_at(&self) -> Result<Option<u64>, DomainError>;
-    /// 分页查询；sort = (列, 是否降序)，空值列永远排在最后
+    /// 分页查询；sort = (列, 是否降序)，空值列永远排在最后；search 为可选商品名模糊匹配
     async fn list_paginated(
         &self,
         offset: u64,
         limit: u64,
         sort: Option<(ProductSortColumn, bool)>,
+        search: Option<&str>,
     ) -> Result<Page<Product>, DomainError>;
     /// 使用某个标签的全部商品（用于删除标签前的影响提示）
     async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError>;

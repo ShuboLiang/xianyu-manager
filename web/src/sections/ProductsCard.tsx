@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowDown, ArrowUp, ArrowUpDown, Check, Download, Package, Pencil, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, Download, Package, Pencil, Search, X } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -51,16 +51,18 @@ import type {
 } from '@/types/api';
 
 interface Props {
-  products: Product[]; // 当前页数据（服务端分页 + 排序）
+  products: Product[];
   total: number;
   page: number;
   pageSize: number;
   sortBy: string | null;
   sortDir: 'asc' | 'desc';
+  search: string;
   tags: Tag[];
   loading?: boolean;
   onPageChange: (page: number, pageSize: number) => void;
   onSortChange: (sortBy: SortKey) => void;
+  onSearchChange: (search: string) => void;
   onRefresh: () => void;
   onRefreshAiCalls: () => void;
   onEnqueueProducts: (ids: number[]) => Promise<boolean>;
@@ -78,10 +80,12 @@ export function ProductsCard({
   pageSize,
   sortBy,
   sortDir,
+  search,
   tags,
   loading,
   onPageChange,
   onSortChange,
+  onSearchChange,
   onRefresh,
   onRefreshAiCalls,
   onEnqueueProducts,
@@ -92,6 +96,22 @@ export function ProductsCard({
   const [formTagIds, setFormTagIds] = useState<Set<number>>(new Set());
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+
+  // 搜索：本地输入 + 300ms 防抖后同步到父组件触发查询
+  const [localSearch, setLocalSearch] = useState(search);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setLocalSearch(search);
+  }, [search]);
+
+  const handleSearchChange = (value: string) => {
+    setLocalSearch(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      onSearchChange(value.trim());
+    }, 300);
+  };
 
   // 回收价行内编辑：recycleEditingId 非空表示该行处于编辑态
   const [recycleEditingId, setRecycleEditingId] = useState<number | null>(null);
@@ -393,6 +413,23 @@ export function ProductsCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="w-48 pl-8"
+              placeholder="搜索商品..."
+              value={localSearch}
+              onChange={(e) => handleSearchChange(e.target.value)}
+            />
+            {localSearch && (
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => handleSearchChange('')}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
           <Input
             className="w-56"
             placeholder="商品名，如：佳能 5D4 机身"

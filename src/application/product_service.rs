@@ -124,13 +124,14 @@ impl ProductService {
             .ok_or_else(|| DomainError::NotFound(format!("商品 {id}")))
     }
 
-    /// 分页查询（page 从 1 开始，调用方已完成钳制）；sort_by 非法时返回 InvalidInput
+    /// 分页查询（page 从 1 开始，调用方已完成钳制）；sort_by 非法时返回 InvalidInput；search 为可选模糊匹配
     pub async fn list_paginated(
         &self,
         page: u64,
         page_size: u64,
         sort_by: Option<String>,
         sort_dir: Option<String>,
+        search: Option<String>,
     ) -> Result<Page<Product>, DomainError> {
         let sort = match sort_by {
             Some(s) => {
@@ -141,8 +142,12 @@ impl ProductService {
             }
             None => None,
         };
+        let search_str = search.as_deref().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        });
         self.products
-            .list_paginated((page - 1) * page_size, page_size, sort)
+            .list_paginated((page - 1) * page_size, page_size, sort, search_str)
             .await
     }
 
