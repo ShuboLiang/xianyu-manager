@@ -83,6 +83,7 @@ pub async fn update_product(
         name: req.name,
         tag_ids: req.tag_ids,
         remark: req.remark,
+        recycle_price: req.recycle_price,
     };
     match state.product_service.update_product(id, patch).await {
         Ok(product) => {

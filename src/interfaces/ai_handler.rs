@@ -8,7 +8,8 @@ use crate::application::ai_provider_service::AiProviderPatch;
 use super::dto::{
     AiProviderCreateRequest, AiProviderResponse, AiProviderUpdateRequest, AiStatusResponse,
     AiToolCallResponse, ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse,
-    ClassifyTaskResponse, PageQuery, PageResponse, TestConnectionResponse,
+    ClassifyTaskResponse, CrawlPromptRequest, CrawlPromptResponse, PageQuery, PageResponse,
+    TestConnectionResponse,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -113,6 +114,31 @@ pub async fn test_provider(
 pub async fn ai_status(State(state): State<AppState>) -> Json<ApiResponse<AiStatusResponse>> {
     match state.ai_provider_service.status().await {
         Ok(s) => Json(ApiResponse::ok(s.into())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/ai/crawl-prompt：读取用户自定义抓取提示词
+pub async fn get_crawl_prompt(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<CrawlPromptResponse>> {
+    match state.ai_settings_service.get_crawl_prompt().await {
+        Ok(p) => Json(ApiResponse::ok(CrawlPromptResponse {
+            custom_prompt: p,
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// PUT /api/ai/crawl-prompt：保存（整体覆盖；空串 = 清空）
+pub async fn update_crawl_prompt(
+    State(state): State<AppState>,
+    Json(req): Json<CrawlPromptRequest>,
+) -> Json<ApiResponse<CrawlPromptResponse>> {
+    match state.ai_settings_service.save_crawl_prompt(req.custom_prompt).await {
+        Ok(p) => Json(ApiResponse::ok(CrawlPromptResponse {
+            custom_prompt: p,
+        })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

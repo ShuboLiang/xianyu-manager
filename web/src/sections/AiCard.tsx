@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertDialog,
@@ -30,6 +30,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '@/lib/api';
 import { Pager } from '@/sections/Pager';
 import type { AiProvider, AiStatus, AiToolCall, PageResponse, TestConnectionResponse } from '@/types/api';
@@ -64,12 +65,13 @@ const AI_PRESETS: Record<string, { name: string; base_url: string; model: string
 interface Props {
   providers: AiProvider[];
   status: AiStatus | null;
+  crawlPrompt: string; // 用户自定义抓取提示词（筛选/定价规则）
   toolCalls: PageResponse<AiToolCall>; // 服务端分页的调用记录
   onCallsPageChange: (page: number, pageSize: number) => void;
   onRefresh: () => void;
 }
 
-export function AiCard({ providers, status, toolCalls, onCallsPageChange, onRefresh }: Props) {
+export function AiCard({ providers, status, crawlPrompt, toolCalls, onCallsPageChange, onRefresh }: Props) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
@@ -77,6 +79,24 @@ export function AiCard({ providers, status, toolCalls, onCallsPageChange, onRefr
   const [model, setModel] = useState('gpt-4o-mini');
   const [timeoutSecs, setTimeoutSecs] = useState(60);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [promptText, setPromptText] = useState(crawlPrompt);
+  const [promptSaving, setPromptSaving] = useState(false);
+
+  // 外部加载完成后同步到本地编辑态
+  useEffect(() => setPromptText(crawlPrompt), [crawlPrompt]);
+
+  const savePrompt = async () => {
+    setPromptSaving(true);
+    try {
+      await apiPut('/api/ai/crawl-prompt', { custom_prompt: promptText });
+      toast.success('抓取提示词已保存，下一轮抓取生效');
+      onRefresh();
+    } catch (e) {
+      toast.error(`保存失败: ${(e as Error).message}`);
+    } finally {
+      setPromptSaving(false);
+    }
+  };
 
   const applyPreset = (key: string) => {
     const preset = AI_PRESETS[key];
@@ -172,6 +192,7 @@ export function AiCard({ providers, status, toolCalls, onCallsPageChange, onRefr
           <CardTitle>AI</CardTitle>
           <TabsList>
             <TabsTrigger value="providers">接口配置</TabsTrigger>
+            <TabsTrigger value="prompt">抓取提示词</TabsTrigger>
             <TabsTrigger value="calls">调用记录（{toolCalls.total}）</TabsTrigger>
           </TabsList>
         </CardHeader>
@@ -275,6 +296,28 @@ export function AiCard({ providers, status, toolCalls, onCallsPageChange, onRefr
                 )}
               </TableBody>
             </Table>
+          </CardContent>
+        </TabsContent>
+        <TabsContent value="prompt">
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              自定义 AI 抓取时的筛选与定价规则，保存后下一轮抓取生效（无需重启）。
+              定价规则以折扣系数表达时（如「打八折」），AI 会按系数计算该商品的回收价（回收价 = 中位数 × 系数）；
+              未匹配到规则的商品使用默认系数。
+            </p>
+            <Textarea
+              rows={6}
+              maxLength={2000}
+              placeholder={'例：CPU 类商品回收价打九折（0.9），显示器类打八折（0.8）；\n求购帖、配件帖一律不选；只选个人卖家。'}
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+            />
+            <div className="flex items-center gap-3">
+              <Button onClick={savePrompt} disabled={promptSaving}>
+                {promptSaving ? '保存中…' : '保存提示词'}
+              </Button>
+              <span className="text-sm text-muted-foreground">{promptText.trim().length}/2000</span>
+            </div>
           </CardContent>
         </TabsContent>
         <TabsContent value="calls">

@@ -50,7 +50,7 @@ src/
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
 │   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
-│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）
+│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）
 │   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
@@ -60,6 +60,7 @@ src/
 │   ├── product_service.rs#  待爬取商品 CRUD（重名校验、标签存在校验）+ 分页排序列表
 │   ├── queue_service.rs #   抓取队列：选择器解析、入队去重、全局唯一 worker 串行消费
 │   ├── ai_provider_service.rs # AI 供应商配置管理 + 连通性测试
+│   ├── ai_settings_service.rs # AI 应用设置：用户自定义抓取提示词读写（存 app_settings KV 表）
 │   ├── ai_tool_call_service.rs # AI 工具调用审计查询（分页）
 │   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（AI 驱动抓取 + 两个工具）
 │   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
@@ -71,7 +72,7 @@ src/
 │   ├── crawl_queue.rs   #   CrawlQueue/CrawlEntry 实体、Selector 值对象、状态机
 │   ├── ai_provider.rs   #   AiProvider 实体（OpenAI 兼容端点配置）
 │   ├── ai_tool_call.rs  #   AiToolCall 审计实体
-│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiToolCallRepository
+│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiToolCallRepository / SettingsRepository（KV 设置）
 │   └── error.rs         #   DomainError，全项目统一错误语义
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
@@ -80,7 +81,7 @@ src/
     ├── ai_gateway.rs    #   AiGateway 实现：基于 rig-core 的 OpenAI 兼容端点 + 手写 ReAct 工具循环
     └── persistence/
         ├── memory.rs    #   内存仓储：抓取任务、AI 分类任务（重启即失）；ItemRepository 内存实现保留为备选
-        └── sqlite.rs    #   SQLite 仓储：抓取商品数据、标签、待爬取商品、抓取队列+条目、AI 配置与审计（共享连接池，启动自动建表）
+        └── sqlite.rs    #   SQLite 仓储：抓取商品数据、标签、待爬取商品、抓取队列+条目、AI 配置与审计、app_settings KV 设置（共享连接池，启动自动建表）
 static/                  # 前端构建产物（由 web/ 执行 npm run build 生成，axum 托管，勿手改）
 web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + shadcn/ui
 ├── src/types/generated/ #   ts-rs 从 dto.rs 自动生成的类型（cargo test export_bindings，勿手改）
@@ -105,7 +106,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + sh
 - **闲鱼网关是端口+实现（防腐层）**：`XianYuGateway` trait 定义在 `application/ports.rs`，实现（登录态、mtop 签名、解析）在 `infrastructure/xianyu_gateway.rs`。开发用 `GATEWAY=mock`。
 - **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。抓取商品数据（items 表，id=详情页 URL，重复抓取 INSERT OR REPLACE 覆盖）、标签、商品、队列、AI 配置/审计均已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）；抓取任务与 AI 分类任务仍是内存实现（重启即失，可接受）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
 - **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
-- **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）只由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
+- **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null；**回收价例外地允许手动设置/清空**（更新接口 `recycle_price`：不传=不修改，null=清空，数值=设定，校验在 `Product::set_recycle_price`，下一轮爬取会覆盖手动值；前端商品表格回收价单元格行内编辑）。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
 - **删除语义**：数据库层一律 `CASCADE` 兜底（删标签/删商品只清关联，另一方不受影响）；交互层做影响提示——`GET /api/tags/{id}/products` 返回使用该标签的商品，前端删除标签前在确认框中列出受影响商品。不做「阻止删除」。
 - **列表分页**：`/api/items`、`/api/products`、`/api/ai/tool-calls` 三个列表接口服务端分页，统一 `page`（从 1 起）/ `page_size`（默认 20，clamp 1..=100，钳制逻辑在 `item_handler::normalize_page`），响应为 `PageResponse<T> { items, total, page, page_size }`（`PageResponse<T>` 泛型不经 ts-rs 导出，前端 `api.ts` 手写）。商品列表支持服务端排序（`sort_by`/`sort_dir`，排序列白名单枚举 `ProductSortColumn` 在 `domain/repository.rs`，SQL 空值沉底）；前端列头排序只是改查询条件回第 1 页。tags 和 queues 不分页（标签是全局选项源，队列轮询需全量活跃视图）。KPI 概览不从列表数据推导，由 `GET /api/stats` 提供（product_count / crawled_today=滚动 24h 窗口 / last_crawled_at）。
 - **抓取队列**（详细方案见 `docs/design-crawl-queue.md`）：
@@ -117,6 +118,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + Tailwind + sh
   - 历史清理：`DELETE /api/queues/{id}` 只允许删除 done/cancelled 的队列（条目一并删除），活跃队列拒绝并提示先取消。前端默认只展示活跃队列，done/cancelled 收进「历史队列」折叠区，可在展开后单个删除。
   - 每条抓取成功后调用 `Product::record_crawl_result` 回填统计（中位数/均价/数量/最后爬取时间/回收价格）。`GATEWAY=mock` 下回收价用均价占位；`GATEWAY=webbridge` 走下方 AI 驱动抓取，回收价 = 中位数 × `RECYCLE_FACTOR`（默认 0.9）。
 - **AI 驱动抓取**（`GATEWAY=webbridge`，实现在 `application/ai/crawl_agent_service.rs`）：队列条目由 ReAct agent 处理——AI 调 `xianyu_search`（经 `WebBridgeClient` 驱动本机真实浏览器带登录态搜闲鱼，导航到搜索页 → 等 SPA 渲染 → evaluate JS 提取候选，最多 30 条）→ AI 从候选中挑最多 8 个「描述最匹配、质量最高」的有效商品（剔除配件/求购/不相关/异常价）→ 调 `save_crawl_result` 提交，工具内算中位数/均价/回收价并写库（items + product 统计）。`save_crawl_result` 未被调用则条目记 failed；两次工具调用都落 `ai_tool_calls` 审计表。WebBridge 未启动/未登录/被风控时错误信息会指向浏览器标签组「闲鱼数据抓取」。
+  - **用户自定义抓取提示词**（`AiSettingsService`，存 `app_settings` 表键 `crawl_custom_prompt`，`GET/PUT /api/ai/crawl-prompt` 读写，前端「AI → 抓取提示词」tab 编辑）：每次抓取读取最新值注入 agent system prompt（保存后下一轮即生效），可表达筛选与定价规则（如「CPU 类回收价打九折，显示器类打八折」）；`save_crawl_result` 支持可选 `recycle_factor` 参数（(0,1]，越界报错让 AI 重试），AI 按规则为商品选择系数，省略则用 `RECYCLE_FACTOR` 默认值。
 - **AI 基础设施**（详细方案见 `docs/design-ai-module.md`）：
   - `AiGateway`/`AiTool` 端口在 `application/ports.rs`；真实实现 `RigAiGateway` 在 `infrastructure/ai_gateway.rs`，基于 `rig-core` 0.41 的 OpenAI 兼容端点（DeepSeek/千问/Kimi 等通用），手写 ReAct 工具循环。
   - AI 供应商配置入库管理（`ai_providers`）：前端「AI 接口管理」卡片可增删改查、设默认、测试连通性；密钥明文存本地 SQLite，响应掩码显示。优先级：**DB 默认配置 > `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 环境变量兜底**。

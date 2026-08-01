@@ -14,7 +14,7 @@ use crate::domain::item::Item;
 use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{
     AiProviderRepository, AiToolCallRepository, ItemRepository, Page, ProductRepository,
-    ProductSortColumn, QueueRepository, TagRepository,
+    ProductSortColumn, QueueRepository, SettingsRepository, TagRepository,
 };
 use crate::domain::tag::{NewTag, Tag, TagName};
 
@@ -157,6 +157,17 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             error       TEXT,
             duration_ms INTEGER NOT NULL,
             created_at  INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    // 应用级 KV 设置（用户自定义抓取提示词等）
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         )",
     )
     .execute(&*pool)
@@ -1026,6 +1037,40 @@ fn row_to_item(row: &SqliteRow) -> Item {
         url: row.get("url"),
         crawled_at: row.get::<i64, _>("crawled_at") as u64,
         product_id: row.get("product_id"),
+    }
+}
+
+// ---------- 应用级 KV 设置 ----------
+
+pub struct SqliteSettingsRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteSettingsRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SettingsRepository for SqliteSettingsRepository {
+    async fn get(&self, key: &str) -> Result<Option<String>, DomainError> {
+        let row = sqlx::query("SELECT value FROM app_settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(row.map(|r| r.get("value")))
+    }
+
+    async fn set(&self, key: &str, value: &str) -> Result<(), DomainError> {
+        sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(())
     }
 }
 

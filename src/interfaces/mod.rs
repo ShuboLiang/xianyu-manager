@@ -19,6 +19,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::application::ai::classify_service::ClassifyService;
 use crate::application::ai_provider_service::AiProviderService;
+use crate::application::ai_settings_service::AiSettingsService;
 use crate::application::ai_tool_call_service::AiToolCallService;
 use crate::application::crawl_service::CrawlService;
 use crate::application::item_service::ItemService;
@@ -38,6 +39,7 @@ pub struct AppState {
     pub product_service: Arc<ProductService>,
     pub queue_service: Arc<QueueService>,
     pub ai_provider_service: Arc<AiProviderService>,
+    pub ai_settings_service: Arc<AiSettingsService>,
     pub ai_tool_call_service: Arc<AiToolCallService>,
     pub classify_service: Arc<ClassifyService>,
     pub stats_service: Arc<StatsService>,
@@ -90,6 +92,10 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route("/queues/{id}/cancel", post(queue_handler::cancel_queue))
         // AI 配置
         .route("/ai/status", get(ai_handler::ai_status))
+        .route(
+            "/ai/crawl-prompt",
+            get(ai_handler::get_crawl_prompt).put(ai_handler::update_crawl_prompt),
+        )
         .route("/ai/tool-calls", get(ai_handler::list_tool_calls))
         .route(
             "/ai/providers",

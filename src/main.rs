@@ -10,6 +10,7 @@ use std::sync::Arc;
 use application::ai::classify_service::ClassifyService;
 use application::ai::crawl_agent_service::CrawlAgentService;
 use application::ai_provider_service::AiProviderService;
+use application::ai_settings_service::AiSettingsService;
 use application::ai_tool_call_service::AiToolCallService;
 use application::crawl_service::CrawlService;
 use application::item_service::ItemService;
@@ -24,7 +25,8 @@ use infrastructure::persistence::memory::{
 };
 use infrastructure::persistence::sqlite::{
     self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteItemRepository,
-    SqliteProductRepository, SqliteQueueRepository, SqliteTagRepository,
+    SqliteProductRepository, SqliteQueueRepository, SqliteSettingsRepository,
+    SqliteTagRepository,
 };
 use infrastructure::webbridge_client::{launch_webbridge_daemon, WebBridgeClient};
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
@@ -50,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
     let product_repo = Arc::new(SqliteProductRepository::new(pool.clone()));
     let queue_repo = Arc::new(SqliteQueueRepository::new(pool.clone()));
     let ai_provider_repo = Arc::new(SqliteAiProviderRepository::new(pool.clone()));
-    let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool));
+    let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool.clone()));
+    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool));
     // GATEWAY=webbridge：真实抓取走 WebBridge 浏览器（同时作为普通网关供 CrawlService 取原始候选）
     if config.gateway == "webbridge" {
         if let Some(bin_path) = &config.webbridge_bin_path {
@@ -113,9 +116,11 @@ async fn main() -> anyhow::Result<()> {
             product_repo.clone(),
             item_repo.clone(),
             ai_gateway,
+            settings_repo.clone(),
             config.recycle_factor,
         ))
     });
+    let ai_settings_service = Arc::new(AiSettingsService::new(settings_repo));
 
     let queue_service = Arc::new(QueueService::new(
         queue_repo,
@@ -140,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
             product_service,
             queue_service,
             ai_provider_service,
+            ai_settings_service,
             ai_tool_call_service,
             classify_service,
             stats_service,

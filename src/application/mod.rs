@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod ai_provider_service;
+pub mod ai_settings_service;
 pub mod ai_tool_call_service;
 pub mod cancel_token;
 pub mod crawl_service;

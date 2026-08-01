@@ -8,6 +8,7 @@ import type { AiToolCallResponse } from './generated/AiToolCallResponse';
 import type { ClassifySuggestionDto } from './generated/ClassifySuggestionDto';
 import type { ClassifyTaskResponse } from './generated/ClassifyTaskResponse';
 import type { ClassifyWarningDto } from './generated/ClassifyWarningDto';
+import type { CrawlPromptResponse } from './generated/CrawlPromptResponse';
 import type { ItemResponse } from './generated/ItemResponse';
 import type { ProductBriefResponse } from './generated/ProductBriefResponse';
 import type { ProductResponse } from './generated/ProductResponse';
@@ -43,6 +44,7 @@ export type AiToolCall = AiToolCallResponse;
 export type ClassifySuggestion = ClassifySuggestionDto;
 export type ClassifyTask = ClassifyTaskResponse;
 export type ClassifyWarning = ClassifyWarningDto;
+export type CrawlPrompt = CrawlPromptResponse;
 
 // ---------- 全局统计 ----------
 

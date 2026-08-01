@@ -18,11 +18,13 @@ pub struct BatchCreateResult {
 
 /// 更新商品的补丁：None 表示不修改该字段。
 /// `tag_ids` 传 Some(vec![]) 表示清空全部标签，Some(ids) 表示整体替换。
+/// `recycle_price` 是双层 Option：None=不修改，Some(None)=清空，Some(Some(v))=手动设定。
 #[derive(Debug, Default)]
 pub struct ProductPatch {
     pub name: Option<String>,
     pub tag_ids: Option<Vec<i64>>,
     pub remark: Option<String>,
+    pub recycle_price: Option<Option<f64>>,
 }
 
 pub struct ProductService {
@@ -177,6 +179,11 @@ impl ProductService {
                 None => product.remark.clone(),
             };
             product.update_info(name, tag_ids, remark);
+        }
+
+        // 回收价手动设置/清空（校验在实体方法里）
+        if let Some(recycle_price) = patch.recycle_price {
+            product.set_recycle_price(recycle_price)?;
         }
 
         self.products.update(&product).await?;

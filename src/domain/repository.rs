@@ -160,3 +160,12 @@ pub trait AiClassifyTaskRepository: Send + Sync {
     async fn save(&self, task: &AiClassifyTask) -> Result<(), DomainError>;
     async fn find(&self, id: &str) -> Result<Option<AiClassifyTask>, DomainError>;
 }
+
+/// 应用级 KV 设置（用户自定义抓取提示词等），存 app_settings 表
+#[async_trait]
+pub trait SettingsRepository: Send + Sync {
+    /// 键不存在时返回 None
+    async fn get(&self, key: &str) -> Result<Option<String>, DomainError>;
+    /// 覆盖式写入（INSERT OR REPLACE）
+    async fn set(&self, key: &str, value: &str) -> Result<(), DomainError>;
+}

@@ -31,6 +31,7 @@ import type {
   AiProvider,
   AiStatus,
   AiToolCall,
+  CrawlPrompt,
   EnqueueResponse,
   Item,
   PageResponse,
@@ -69,6 +70,7 @@ export default function App() {
   const [queues, setQueues] = useState<QueueProgress[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [crawlPrompt, setCrawlPrompt] = useState('');
   const [stats, setStats] = useState<StatsResponse | null>(null);
 
   // 分页列表：查询条件 + 当前页数据（商品/原始数据/AI 调用记录）
@@ -228,12 +230,14 @@ export default function App() {
 
   const loadAi = useCallback(async () => {
     try {
-      const [providers, status] = await Promise.all([
+      const [providers, status, prompt] = await Promise.all([
         apiGet<AiProvider[]>('/api/ai/providers'),
         apiGet<AiStatus>('/api/ai/status'),
+        apiGet<CrawlPrompt>('/api/ai/crawl-prompt'),
       ]);
       setAiProviders(providers);
       setAiStatus(status);
+      setCrawlPrompt(prompt.custom_prompt);
     } catch {
       /* ignore */
     }
@@ -470,6 +474,7 @@ export default function App() {
                   <AiCard
                     providers={aiProviders}
                     status={aiStatus}
+                    crawlPrompt={crawlPrompt}
                     toolCalls={aiCallsPage}
                     onCallsPageChange={changeAiCallsPage}
                     onRefresh={loadAi}

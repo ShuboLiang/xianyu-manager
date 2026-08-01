@@ -1,6 +1,7 @@
 //! 待爬取商品实体：管理「要爬哪些商品」。
 //! 基础信息（名称/标签/备注）由用户维护；统计字段（中位数、均价、爬取数量、
-//! 最后爬取时间、回收价格）只在爬取完成后写入，未爬取时为空。
+//! 最后爬取时间）只在爬取完成后写入，未爬取时为空。
+//! 回收价默认由爬取结果计算，也允许用户手动设置/清空（下一轮爬取会覆盖）。
 
 use super::crawl_task::now_unix;
 use super::error::DomainError;
@@ -88,6 +89,19 @@ impl Product {
         self.recycle_price = Some(recycle_price);
         self.last_crawled_at = Some(now_unix());
         self.touch();
+    }
+
+    /// 手动设置/清空回收价（元）：Some 必须是正的有限值，None = 清空。
+    /// 下一轮爬取完成时会按计算结果覆盖手动值。
+    pub fn set_recycle_price(&mut self, price: Option<f64>) -> Result<(), DomainError> {
+        if let Some(p) = price {
+            if !p.is_finite() || p <= 0.0 {
+                return Err(DomainError::InvalidInput("回收价必须为正数".into()));
+            }
+        }
+        self.recycle_price = price;
+        self.touch();
+        Ok(())
     }
 
     fn touch(&mut self) {

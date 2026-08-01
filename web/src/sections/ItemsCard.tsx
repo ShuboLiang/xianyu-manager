@@ -78,9 +78,18 @@ export function ItemsCard({ items, total, page, pageSize, loading, onPageChange,
               <TableBody>
                 {items.map((it) => (
                   <TableRow key={it.id}>
-                    <TableCell>{it.title}</TableCell>
-                    <TableCell className="font-data">¥{it.price}</TableCell>
-                    <TableCell>{it.seller}</TableCell>
+                    {/* 标题单行截断，悬浮显示全文，避免长标题挤占其他列 */}
+                    <TableCell className="max-w-64">
+                      <span className="block truncate" title={it.title}>
+                        {it.title}
+                      </span>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap font-data">¥{it.price}</TableCell>
+                    <TableCell className="max-w-32">
+                      <span className="block truncate" title={it.seller}>
+                        {it.seller}
+                      </span>
+                    </TableCell>
                     <TableCell className="whitespace-nowrap">{fmtTime(it.crawled_at)}</TableCell>
                     <TableCell>
                       <a className="text-primary hover:underline" href={it.url} target="_blank" rel="noreferrer">

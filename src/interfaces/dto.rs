@@ -149,6 +149,10 @@ pub struct ProductUpdateRequest {
     #[ts(type = "Array<number> | null")]
     pub tag_ids: Option<Vec<i64>>,
     pub remark: Option<String>,
+    /// 回收价（元）：不传=不修改，null=清空，数值=手动设定（下一轮爬取会覆盖）
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub recycle_price: Option<Option<f64>>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -399,6 +403,19 @@ pub struct AiStatusResponse {
     pub source: Option<String>,
     pub name: Option<String>,
     pub model: Option<String>,
+}
+
+/// 用户自定义抓取提示词（作用于 AI 抓取的筛选与回收价定价）
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CrawlPromptRequest {
+    pub custom_prompt: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct CrawlPromptResponse {
+    pub custom_prompt: String,
 }
 
 impl From<AiStatus> for AiStatusResponse {

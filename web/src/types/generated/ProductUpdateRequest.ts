@@ -4,4 +4,8 @@ export type ProductUpdateRequest = { name: string | null,
 /**
  * 不传=不修改，空数组=清空全部标签，非空数组=整体替换
  */
-tag_ids: Array<number> | null, remark: string | null, };
+tag_ids: Array<number> | null, remark: string | null, 
+/**
+ * 回收价（元）：不传=不修改，null=清空，数值=手动设定（下一轮爬取会覆盖）
+ */
+recycle_price: number | null, };

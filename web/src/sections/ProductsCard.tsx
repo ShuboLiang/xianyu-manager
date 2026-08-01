@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowDown, ArrowUp, ArrowUpDown, Package } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, Package, Pencil, X } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -92,6 +92,36 @@ export function ProductsCard({
   const [formTagIds, setFormTagIds] = useState<Set<number>>(new Set());
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+
+  // 回收价行内编辑：recycleEditingId 非空表示该行处于编辑态
+  const [recycleEditingId, setRecycleEditingId] = useState<number | null>(null);
+  const [recycleInput, setRecycleInput] = useState('');
+
+  const startRecycleEdit = (p: Product) => {
+    setRecycleEditingId(p.id);
+    setRecycleInput(p.recycle_price != null ? String(p.recycle_price) : '');
+  };
+
+  const saveRecyclePrice = async (id: number) => {
+    const trimmed = recycleInput.trim();
+    // 留空 = 清空回收价；否则必须是正数
+    let value: number | null = null;
+    if (trimmed !== '') {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0) {
+        toast.error('回收价必须为正数，留空表示清空');
+        return;
+      }
+      value = n;
+    }
+    try {
+      await apiPut(`/api/products/${id}`, { recycle_price: value });
+      setRecycleEditingId(null);
+      onRefresh();
+    } catch (e) {
+      toast.error(`保存回收价失败: ${(e as Error).message}`);
+    }
+  };
 
   // 抓取明细弹窗：detailProduct 非空即打开；detailItems=null 表示加载中
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
@@ -463,7 +493,51 @@ export function ProductsCard({
                   <TableCell className="whitespace-nowrap font-data text-xs">
                     {fmtTime(p.last_crawled_at)}
                   </TableCell>
-                  <TableCell className="font-data">{fmtPrice(p.recycle_price)}</TableCell>
+                  <TableCell className="font-data">
+                    {recycleEditingId === p.id ? (
+                      <span className="flex items-center gap-1">
+                        <Input
+                          className="h-7 w-24"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          placeholder="留空清空"
+                          autoFocus
+                          value={recycleInput}
+                          onChange={(e) => setRecycleInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void saveRecyclePrice(p.id);
+                            if (e.key === 'Escape') setRecycleEditingId(null);
+                          }}
+                        />
+                        <button
+                          className="text-primary hover:opacity-70"
+                          title="保存（下一轮爬取会覆盖手动值）"
+                          onClick={() => void saveRecyclePrice(p.id)}
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
+                        <button
+                          className="text-muted-foreground hover:opacity-70"
+                          title="取消"
+                          onClick={() => setRecycleEditingId(null)}
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="group flex items-center gap-1">
+                        {fmtPrice(p.recycle_price)}
+                        <button
+                          className="text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                          title="手动修改回收价（下一轮爬取会覆盖）"
+                          onClick={() => startRecycleEdit(p)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell>{p.remark || '-'}</TableCell>
                   <TableCell className="space-x-3 whitespace-nowrap">
                     <button className="text-primary hover:underline" onClick={() => crawlOne(p.id)}>
@@ -537,7 +611,7 @@ export function ProductsCard({
         </Dialog>
 
         <Dialog open={detailProduct !== null} onOpenChange={(o) => !o && setDetailProduct(null)}>
-          <DialogContent className="max-w-3xl">
+          <DialogContent className="w-[92vw] sm:max-w-5xl">
             <DialogHeader>
               <DialogTitle>
                 「{detailProduct?.name}」最新一轮抓取明细
@@ -555,6 +629,7 @@ export function ProductsCard({
                 暂无抓取明细——该商品还没有完成过一轮抓取，点「抓取」开始。
               </p>
             ) : (
+              <div className="max-h-[70vh] overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -567,11 +642,16 @@ export function ProductsCard({
                 <TableBody>
                   {detailItems.map((it) => (
                     <TableRow key={it.id}>
-                      <TableCell className="max-w-md">
-                        <span className="line-clamp-2">{it.title}</span>
+                      <TableCell className="max-w-xl">
+                        {/* 最多两行，悬浮显示全文 */}
+                        <span className="line-clamp-2" title={it.title}>{it.title}</span>
                       </TableCell>
-                      <TableCell className="font-data">¥{it.price}</TableCell>
-                      <TableCell>{it.seller || '-'}</TableCell>
+                      <TableCell className="whitespace-nowrap font-data">¥{it.price}</TableCell>
+                      <TableCell className="max-w-32">
+                        <span className="block truncate" title={it.seller}>
+                          {it.seller || '-'}
+                        </span>
+                      </TableCell>
                       <TableCell>
                         <a className="text-primary hover:underline" href={it.url} target="_blank" rel="noreferrer">
                           查看
@@ -581,6 +661,7 @@ export function ProductsCard({
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </DialogContent>
         </Dialog>

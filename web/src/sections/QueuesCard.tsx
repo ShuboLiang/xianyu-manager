@@ -82,18 +82,21 @@ interface Props {
 
 function SelectorGroup({
   title,
+  hint,
   tags,
   checked,
   onToggle,
 }: {
   title: string;
+  hint: string;
   tags: Tag[];
   checked: Set<number>;
   onToggle: (id: number, on: boolean) => void;
 }) {
   return (
     <div>
-      <h3 className="mb-2 text-sm font-medium">{title}</h3>
+      <h3 className="text-sm font-medium">{title}</h3>
+      <p className="mb-2 mt-0.5 text-xs text-muted-foreground">{hint}</p>
       <div className="flex flex-wrap gap-x-4 gap-y-2">
         {tags.length === 0 ? (
           <span className="text-sm text-muted-foreground">暂无标签</span>
@@ -168,7 +171,7 @@ export function QueuesCard({
   const doPreview = async () => {
     const selector = collectSelector();
     if (selectorIsEmpty(selector)) {
-      toast.error('请至少选择一个标签条件或填写天数');
+      toast.error('请先勾选标签条件，或填写天数');
       return;
     }
     try {
@@ -182,7 +185,7 @@ export function QueuesCard({
   const doEnqueue = async () => {
     const selector = collectSelector();
     if (selectorIsEmpty(selector)) {
-      toast.error('请至少选择一个标签条件或填写天数');
+      toast.error('请先勾选标签条件，或填写天数');
       return;
     }
     const ok = await onEnqueueSelector(selector);
@@ -417,35 +420,74 @@ export function QueuesCard({
             />
           </CollapsibleTrigger>
           <CollapsibleContent className="space-y-4 pt-4">
+            <p className="text-sm text-muted-foreground">
+              按标签挑选要抓取的商品，下方三组条件之间是「并且」关系：全部满足才会被抓取。
+            </p>
             <div className="grid gap-4 md:grid-cols-3">
-              <SelectorGroup title="全部包含（AND）" tags={tags} checked={selAll} onToggle={toggleIn(selAll, setSelAll)} />
-              <SelectorGroup title="任一包含（OR）" tags={tags} checked={selAny} onToggle={toggleIn(selAny, setSelAny)} />
-              <SelectorGroup title="排除（NOT）" tags={tags} checked={selExclude} onToggle={toggleIn(selExclude, setSelExclude)} />
+              <SelectorGroup
+                title="同时具备这些标签"
+                hint="商品必须带齐全部勾选的标签"
+                tags={tags}
+                checked={selAll}
+                onToggle={toggleIn(selAll, setSelAll)}
+              />
+              <SelectorGroup
+                title="具备其中任一标签"
+                hint="商品带有任一勾选的标签即可"
+                tags={tags}
+                checked={selAny}
+                onToggle={toggleIn(selAny, setSelAny)}
+              />
+              <SelectorGroup
+                title="排除这些标签"
+                hint="带有任一勾选标签的商品不抓取"
+                tags={tags}
+                checked={selExclude}
+                onToggle={toggleIn(selExclude, setSelExclude)}
+              />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                className="w-40"
-                type="number"
-                min={1}
-                placeholder="N 天未爬（可选）"
-                title="最后爬取时间距今 ≥ N 天"
-                value={staleDays}
-                onChange={(e) => setStaleDays(e.target.value)}
-              />
-              <Input
-                className="w-24"
-                type="number"
-                min={1}
-                title="条间间隔（秒）"
-                value={intervalSecs}
-                onChange={(e) => onIntervalChange(Number(e.target.value) || 3)}
-              />
-              <Button variant="secondary" onClick={doPreview}>
-                预览
-              </Button>
-              <Button onClick={doEnqueue}>
-                {appendTarget !== null ? `追加到队列 #${appendTarget}` : '加入队列'}
-              </Button>
+            <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium" htmlFor="stale-days">
+                  只抓超过 N 天没爬过的商品（可不填）
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    id="stale-days"
+                    className="w-24"
+                    type="number"
+                    min={1}
+                    placeholder="如 7"
+                    value={staleDays}
+                    onChange={(e) => setStaleDays(e.target.value)}
+                  />
+                  <span className="text-sm text-muted-foreground">天</span>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium" htmlFor="interval-secs">
+                  每件商品的抓取间隔
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    id="interval-secs"
+                    className="w-24"
+                    type="number"
+                    min={1}
+                    value={intervalSecs}
+                    onChange={(e) => onIntervalChange(Number(e.target.value) || 3)}
+                  />
+                  <span className="text-sm text-muted-foreground">秒</span>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={doPreview}>
+                  预览匹配商品
+                </Button>
+                <Button onClick={doEnqueue}>
+                  {appendTarget !== null ? `追加到队列 #${appendTarget}` : '创建队列'}
+                </Button>
+              </div>
             </div>
             {preview && (
               <div className="rounded-md border bg-muted/50 px-3 py-2 text-sm">

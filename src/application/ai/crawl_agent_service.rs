@@ -10,12 +10,13 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
+use crate::application::ai_settings_service::CRAWL_PROMPT_KEY;
 use crate::application::ports::{AiGateway, AiTool, XianYuGateway};
 use crate::domain::crawl_task::now_unix;
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
 use crate::domain::product::Product;
-use crate::domain::repository::{ItemRepository, ProductRepository};
+use crate::domain::repository::{ItemRepository, ProductRepository, SettingsRepository};
 
 /// AI 单次最多提交的有效商品数
 pub const MAX_SELECTED: usize = 8;
@@ -36,6 +37,7 @@ pub struct CrawlAgentService {
     products: Arc<dyn ProductRepository>,
     items: Arc<dyn ItemRepository>,
     ai: Arc<dyn AiGateway>,
+    settings: Arc<dyn SettingsRepository>,
     recycle_factor: f64,
 }
 
@@ -45,6 +47,7 @@ impl CrawlAgentService {
         products: Arc<dyn ProductRepository>,
         items: Arc<dyn ItemRepository>,
         ai: Arc<dyn AiGateway>,
+        settings: Arc<dyn SettingsRepository>,
         recycle_factor: f64,
     ) -> Self {
         Self {
@@ -52,6 +55,7 @@ impl CrawlAgentService {
             products,
             items,
             ai,
+            settings,
             recycle_factor,
         }
     }
@@ -84,6 +88,25 @@ impl CrawlAgentService {
             3. 调用 save_crawl_result 提交你选中的商品（原样回传 title/price/seller/url）。\n\
             必须用 save_crawl_result 提交后才算完成，不要只输出文字总结。";
 
+        // 每次抓取读取最新用户自定义提示词（保存后下一轮即生效，无需重启）
+        let custom_prompt = self
+            .settings
+            .get(CRAWL_PROMPT_KEY)
+            .await?
+            .unwrap_or_default();
+        let custom_prompt = custom_prompt.trim();
+        let system = if custom_prompt.is_empty() {
+            system.to_string()
+        } else {
+            format!(
+                "{system}\n\
+                用户自定义定价与筛选规则（优先级高于默认规则）：\n\
+                {custom_prompt}\n\
+                若规则以折扣系数表达（如「CPU 类打八折」），调用 save_crawl_result 时为匹配的商品\
+                传入 recycle_factor 参数（取值 (0,1]，如八折=0.8）；无匹配规则时省略该参数，用默认系数。"
+            )
+        };
+
         let user = format!(
             "目标商品：{}\n请搜索、筛选并提交最多 {MAX_SELECTED} 个有效在售商品。",
             product.name.as_str()
@@ -92,7 +115,7 @@ impl CrawlAgentService {
         tracing::trace!("AI agent system prompt: {}", system);
         tracing::trace!("AI agent user prompt: {}", user);
 
-        self.ai.run_agent(system, &user, &tools, MAX_ROUNDS).await?;
+        self.ai.run_agent(&system, &user, &tools, MAX_ROUNDS).await?;
 
         let taken = outcome.lock().expect("outcome 锁中毒").take();
         match &taken {
@@ -234,6 +257,12 @@ impl AiTool for SaveCrawlResultTool {
                         },
                         "required": ["title", "price", "url"]
                     }
+                },
+                "recycle_factor": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1,
+                    "description": "用户定价规则给出的回收价折扣系数（0,1]，如八折=0.8；省略则用默认系数"
                 }
             },
             "required": ["items"]
@@ -305,7 +334,21 @@ impl AiTool for SaveCrawlResultTool {
             (prices[count / 2 - 1] + prices[count / 2]) / 2.0
         };
         let avg = prices.iter().sum::<f64>() / count as f64;
-        let recycle = median * self.recycle_factor;
+        // 回收价 = 中位数 × 系数：AI 可按用户自定义定价规则传 recycle_factor，
+        // 省略时用默认系数（RECYCLE_FACTOR，默认 0.9）
+        let factor = match args.get("recycle_factor") {
+            None | Some(JsonValue::Null) => self.recycle_factor,
+            Some(v) => {
+                let f = v.as_f64().unwrap_or(f64::NAN);
+                if !(f > 0.0 && f <= 1.0) {
+                    return Err(DomainError::InvalidInput(
+                        "recycle_factor 必须在 (0,1] 区间内".into(),
+                    ));
+                }
+                f
+            }
+        };
+        let recycle = median * factor;
 
         let mut product = self
             .products
@@ -333,6 +376,7 @@ impl AiTool for SaveCrawlResultTool {
             "count": count,
             "median_price": median,
             "avg_price": avg,
+            "recycle_factor": factor,
             "recycle_price": recycle,
         }))
     }
