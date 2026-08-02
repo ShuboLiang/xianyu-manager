@@ -92,7 +92,13 @@ export function ProductsPage() {
     queryClient.invalidateQueries({ queryKey: ['aiCalls'] });
   };
 
-  const [checkedIds, setCheckedIds] = useState<number[]>([]);
+  // 跨页选择：用 Set 记录所有已选 id，翻页/排序不清空，搜索/标签筛选变更时清空
+  const checkedSetRef = useRef(new Set<number>());
+  const [checkedCount, setCheckedCount] = useState(0);
+  const addChecked = (id: number) => { checkedSetRef.current.add(id); setCheckedCount(checkedSetRef.current.size); };
+  const removeChecked = (id: number) => { checkedSetRef.current.delete(id); setCheckedCount(checkedSetRef.current.size); };
+  const clearChecked = () => { checkedSetRef.current.clear(); setCheckedCount(0); };
+  const getCheckedIds = () => Array.from(checkedSetRef.current);
 
   // ---------- 新建 / 编辑（弹窗表单） ----------
   const [formOpen, setFormOpen] = useState(false);
@@ -248,15 +254,16 @@ export function ProductsPage() {
   useEffect(() => () => stopPolling(), []);
 
   const aiClassify = async () => {
-    if (checkedIds.length === 0) {
+    const ids = getCheckedIds();
+    if (ids.length === 0) {
       message.error('请先勾选商品');
       return;
     }
-    if (checkedIds.length <= 50) {
+    if (ids.length <= 50) {
       setClassifying(true);
       try {
         const resp = await apiPost<ClassifyProductsResponse>('/api/ai/classify-products', {
-          product_ids: checkedIds,
+          product_ids: ids,
         });
         let msg = `AI 打标签完成，涉及 ${resp.suggestions.length} 个商品`;
         if (resp.warnings.length) msg += `\n${resp.warnings.length} 条警告：\n${resp.warnings.join('\n')}`;
@@ -269,7 +276,7 @@ export function ProductsPage() {
       }
     } else {
       try {
-        const task = await apiPost<ClassifyTask>('/api/ai/classify-tasks', { product_ids: checkedIds });
+        const task = await apiPost<ClassifyTask>('/api/ai/classify-tasks', { product_ids: ids });
         setClassifyTask(task);
         pollClassify(task.id);
       } catch (e) {
@@ -312,14 +319,52 @@ export function ProductsPage() {
   const classifyPct =
     classifyTask && classifyTask.total > 0 ? Math.round((classifyTask.processed / classifyTask.total) * 100) : 0;
 
-  // ---------- 批量入队 / 导出 ----------
+  // ---------- 批量入队 / 批量删除 / 导出 ----------
   const crawlSelected = async () => {
-    if (checkedIds.length === 0) {
+    const ids = getCheckedIds();
+    if (ids.length === 0) {
       message.error('请先勾选商品');
       return;
     }
-    const ok = await enqueue({ product_ids: checkedIds });
-    if (ok) setCheckedIds([]);
+    const ok = await enqueue({ product_ids: ids });
+    if (ok) clearChecked();
+  };
+
+  const batchDelete = () => {
+    const ids = getCheckedIds();
+    if (ids.length === 0) {
+      message.error('请先勾选商品');
+      return;
+    }
+    modal.confirm({
+      title: `批量删除 ${ids.length} 个商品`,
+      content: '删除后标签关联与抓取统计将一并清除；若商品在活跃队列中，对应条目会被跳过。此操作不可恢复。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        let fail = 0;
+        // 串行删除，逐个汇报进度
+        const hide = message.loading(`正在删除 0/${ids.length}...`, 0);
+        for (let i = 0; i < ids.length; i++) {
+          hide();
+          const loading = message.loading(`正在删除 ${i + 1}/${ids.length}...`, 0);
+          try {
+            await apiDelete(`/api/products/${ids[i]}`);
+          } catch {
+            fail++;
+          }
+          loading();
+        }
+        clearChecked();
+        refresh();
+        if (fail > 0) {
+          message.warning(`删除完成，${fail}/${ids.length} 个失败`);
+        } else {
+          message.success(`已删除 ${ids.length} 个商品`);
+        }
+      },
+    });
   };
 
   const exportExcel = async () => {
@@ -508,26 +553,31 @@ export function ProductsPage() {
               allowClear
               placeholder="搜索商品名"
               style={{ width: 280 }}
-              onSearch={(v) => setQuery((q) => ({ ...q, page: 1, search: v.trim() }))}
+              onSearch={(v) => {
+                clearChecked();
+                setQuery((q) => ({ ...q, page: 1, search: v.trim() }));
+              }}
             />
             <Select
               allowClear
               placeholder="按标签筛选"
               style={{ minWidth: 160 }}
               value={query.tagId}
-              onChange={(v) => setQuery((q) => ({ ...q, page: 1, tagId: v ?? null }))}
+              onChange={(v) => {
+                clearChecked();
+                setQuery((q) => ({ ...q, page: 1, tagId: v ?? null }));
+              }}
               options={tags.map((t) => ({ label: t.name, value: t.id }))}
             />
-            {checkedIds.length > 0 && (
+            {checkedCount > 0 && (
               <>
-                <Typography.Text type="secondary">已选 {checkedIds.length} 项</Typography.Text>
+                <Typography.Text type="secondary">已选 {checkedCount} 项</Typography.Text>
                 <Button onClick={crawlSelected}>加入队列</Button>
                 <Button loading={classifying} onClick={aiClassify}>
                   AI 打标签
                 </Button>
-                <Button type="text" onClick={() => setCheckedIds([])}>
-                  清除
-                </Button>
+                <Button danger onClick={batchDelete}>批量删除</Button>
+                <Button type="text" onClick={clearChecked}>清除</Button>
               </>
             )}
           </Space>
@@ -567,8 +617,24 @@ export function ProductsPage() {
             columns={columns}
             dataSource={data?.items ?? []}
             rowSelection={{
-              selectedRowKeys: checkedIds,
-              onChange: (keys) => setCheckedIds(keys as number[]),
+              selectedRowKeys: (data?.items ?? []).filter((p) => checkedSetRef.current.has(p.id)).map((p) => p.id),
+              onSelect: (record, selected) => {
+                if (selected) {
+                  addChecked(record.id);
+                } else {
+                  removeChecked(record.id);
+                }
+              },
+              onSelectAll: (selected, _selectedRows, changeRows) => {
+                for (const r of changeRows) {
+                  if (selected) {
+                    checkedSetRef.current.add(r.id);
+                  } else {
+                    checkedSetRef.current.delete(r.id);
+                  }
+                }
+                setCheckedCount(checkedSetRef.current.size);
+              },
             }}
             onChange={(pagination, _filters, sorter) => {
               const s = sorter as SorterResult<Product>;
