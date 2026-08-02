@@ -23,6 +23,8 @@ pub struct Selector {
     pub tag_exclude: Vec<i64>,
     /// 最后爬取时间距今 ≥ N 天（从未爬过的商品也算）；None = 不做时间过滤
     pub stale_days: Option<u32>,
+    /// 只匹配无标签的商品
+    pub no_tag: bool,
 }
 
 impl Selector {
@@ -32,6 +34,7 @@ impl Selector {
             && self.tag_any.is_empty()
             && self.tag_exclude.is_empty()
             && self.stale_days.is_none()
+            && !self.no_tag
         {
             return Err(DomainError::InvalidInput(
                 "选择器不能为空：至少选择一个标签条件或时间条件".into(),
@@ -41,6 +44,9 @@ impl Selector {
     }
 
     pub fn matches(&self, product: &Product, now: u64) -> bool {
+        if self.no_tag && !product.tag_ids.is_empty() {
+            return false;
+        }
         if !self.tag_all.iter().all(|t| product.tag_ids.contains(t)) {
             return false;
         }
