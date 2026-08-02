@@ -5,7 +5,6 @@ import {
   Badge,
   Button,
   Card,
-  Checkbox,
   Collapse,
   Divider,
   Empty,
@@ -66,7 +65,6 @@ export function QueuesPanel() {
   const [selAny, setSelAny] = useState<number[]>([]);
   const [selExclude, setSelExclude] = useState<number[]>([]);
   const [staleDays, setStaleDays] = useState<number | null>(null);
-  const [noTag, setNoTag] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   // 入队表单折叠：队列开始执行时自动收起；追加条目时强制展开
   const [formOpen, setFormOpen] = useState<string[]>(['form']);
@@ -89,11 +87,10 @@ export function QueuesPanel() {
     tag_any: selAny,
     tag_exclude: selExclude,
     stale_days: staleDays,
-    no_tag: noTag,
   });
 
   const selectorIsEmpty = (s: Selector) =>
-    s.tag_all.length === 0 && s.tag_any.length === 0 && s.tag_exclude.length === 0 && s.stale_days === null && !s.no_tag;
+    s.tag_all.length === 0 && s.tag_any.length === 0 && s.tag_exclude.length === 0 && s.stale_days === null;
 
   const doPreview = async () => {
     const selector = collectSelector();
@@ -291,16 +288,25 @@ export function QueuesPanel() {
         {tags.length === 0 ? (
           <Typography.Text type="secondary">暂无标签</Typography.Text>
         ) : (
-          tags.map((t) => (
+          <>
+            {tags.map((t) => (
+              <Tag.CheckableTag
+                key={t.id}
+                checked={value.includes(t.id)}
+                onChange={(c) => toggleTag(value, onChange)(t.id, c)}
+                style={{ padding: '2px 10px', fontSize: 13, border: '1px solid', userSelect: 'none' }}
+              >
+                {t.name}
+              </Tag.CheckableTag>
+            ))}
             <Tag.CheckableTag
-              key={t.id}
-              checked={value.includes(t.id)}
-              onChange={(c) => toggleTag(value, onChange)(t.id, c)}
-              style={{ padding: '2px 10px', fontSize: 13, border: '1px solid', userSelect: 'none' }}
+              checked={value.includes(-1)}
+              onChange={(c) => toggleTag(value, onChange)(-1, c)}
+              style={{ padding: '2px 10px', fontSize: 13, border: '1px solid', userSelect: 'none', borderStyle: 'dashed' }}
             >
-              {t.name}
+              无标签
             </Tag.CheckableTag>
-          ))
+          </>
         )}
       </div>
     </div>
@@ -378,9 +384,6 @@ export function QueuesPanel() {
                   {selectorGroup('同时具备这些标签', '商品必须带齐全部勾选的标签', selAll, setSelAll)}
                   {selectorGroup('具备其中任一标签', '商品带有任一勾选的标签即可', selAny, setSelAny)}
                   {selectorGroup('排除这些标签', '带有任一勾选标签的商品不抓取', selExclude, setSelExclude)}
-                  <Checkbox checked={noTag} onChange={(e) => setNoTag(e.target.checked)}>
-                    只抓取「无标签」商品
-                  </Checkbox>
                   <Divider style={{ margin: 0 }} />
                   <Space wrap size={24} align="end">
                     <div>

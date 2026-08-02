@@ -197,12 +197,13 @@ impl QueueService {
             }
             EnqueueTarget::Selector(selector) => {
                 selector.validate()?;
-                // 选择器引用的标签必须存在
+                // 选择器引用的标签必须存在（-1 = 无标签伪 id，跳过校验）
                 for id in selector
                     .tag_all
                     .iter()
                     .chain(&selector.tag_any)
                     .chain(&selector.tag_exclude)
+                    .filter(|&&id| id != -1)
                 {
                     if self.tags.find(*id).await?.is_none() {
                         return Err(DomainError::NotFound(format!("标签 {id}")));

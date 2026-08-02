@@ -226,9 +226,6 @@ pub struct SelectorDto {
     #[ts(type = "Array<number>")]
     pub tag_exclude: Vec<i64>,
     pub stale_days: Option<u32>,
-    /// 只匹配无标签的商品
-    #[serde(default)]
-    pub no_tag: bool,
 }
 
 impl From<SelectorDto> for Selector {
@@ -238,7 +235,6 @@ impl From<SelectorDto> for Selector {
             tag_any: d.tag_any,
             tag_exclude: d.tag_exclude,
             stale_days: d.stale_days,
-            no_tag: d.no_tag,
         }
     }
 }

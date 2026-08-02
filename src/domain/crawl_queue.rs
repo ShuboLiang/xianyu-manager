@@ -13,6 +13,7 @@ use super::error::DomainError;
 use super::product::Product;
 
 /// 入队选择器：各维度之间是 AND；标签内部支持「全部包含 / 任一包含 / 排除」
+/// tag_all/tag_any/tag_exclude 中 -1 表示「无标签」，匹配 tag_ids 为空的商品
 #[derive(Debug, Clone, Default)]
 pub struct Selector {
     /// 必须全部包含的标签
@@ -23,9 +24,8 @@ pub struct Selector {
     pub tag_exclude: Vec<i64>,
     /// 最后爬取时间距今 ≥ N 天（从未爬过的商品也算）；None = 不做时间过滤
     pub stale_days: Option<u32>,
-    /// 只匹配无标签的商品
-    pub no_tag: bool,
 }
+const NO_TAG_SENTINEL: i64 = -1;
 
 impl Selector {
     /// 至少需要一个圈选条件，防止误操作全量入队
@@ -34,7 +34,6 @@ impl Selector {
             && self.tag_any.is_empty()
             && self.tag_exclude.is_empty()
             && self.stale_days.is_none()
-            && !self.no_tag
         {
             return Err(DomainError::InvalidInput(
                 "选择器不能为空：至少选择一个标签条件或时间条件".into(),
@@ -44,21 +43,17 @@ impl Selector {
     }
 
     pub fn matches(&self, product: &Product, now: u64) -> bool {
-        if self.no_tag && !product.tag_ids.is_empty() {
+        if !self.check_tags(&self.tag_all, product, TagMatch::All) {
             return false;
         }
-        if !self.tag_all.iter().all(|t| product.tag_ids.contains(t)) {
+        if !self.tag_any.is_empty() && !self.check_tags(&self.tag_any, product, TagMatch::Any) {
             return false;
         }
-        if !self.tag_any.is_empty() && !self.tag_any.iter().any(|t| product.tag_ids.contains(t)) {
-            return false;
-        }
-        if self.tag_exclude.iter().any(|t| product.tag_ids.contains(t)) {
+        if self.check_exclude(&self.tag_exclude, product) {
             return false;
         }
         if let Some(days) = self.stale_days {
             let threshold = now.saturating_sub(days as u64 * 86400);
-            // 近期爬过的（在阈值之后）不匹配；从未爬过（None）匹配
             if let Some(t) = product.last_crawled_at {
                 if t > threshold {
                     return false;
@@ -67,6 +62,47 @@ impl Selector {
         }
         true
     }
+
+    fn check_tags(&self, ids: &[i64], product: &Product, mode: TagMatch) -> bool {
+        let (real_tags, no_tag_present) = self.split_sentinel(ids);
+        let mut ok = true;
+        if no_tag_present {
+            ok = product.tag_ids.is_empty();
+        }
+        if ok && !real_tags.is_empty() {
+            ok = match mode {
+                TagMatch::All => real_tags.iter().all(|t| product.tag_ids.contains(t)),
+                TagMatch::Any => real_tags.iter().any(|t| product.tag_ids.contains(t)),
+            };
+        }
+        ok
+    }
+
+    fn check_exclude(&self, ids: &[i64], product: &Product) -> bool {
+        let (real_tags, no_tag_present) = self.split_sentinel(ids);
+        if no_tag_present && product.tag_ids.is_empty() {
+            return true;
+        }
+        real_tags.iter().any(|t| product.tag_ids.contains(t))
+    }
+
+    fn split_sentinel(&self, ids: &[i64]) -> (Vec<i64>, bool) {
+        let mut real = Vec::with_capacity(ids.len());
+        let mut has_sentinel = false;
+        for &id in ids {
+            if id == NO_TAG_SENTINEL {
+                has_sentinel = true;
+            } else {
+                real.push(id);
+            }
+        }
+        (real, has_sentinel)
+    }
+}
+
+enum TagMatch {
+    All,
+    Any,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
