@@ -16,7 +16,7 @@ use crate::domain::crawl_task::now_unix;
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
 use crate::domain::product::Product;
-use crate::domain::repository::{ItemRepository, ProductRepository, SettingsRepository};
+use crate::domain::repository::{ItemRepository, ProductRepository, SettingsRepository, TagRepository};
 
 /// AI 单次最多提交的有效商品数
 pub const MAX_SELECTED: usize = 8;
@@ -38,6 +38,7 @@ pub struct CrawlAgentService {
     items: Arc<dyn ItemRepository>,
     ai: Arc<dyn AiGateway>,
     settings: Arc<dyn SettingsRepository>,
+    tags: Arc<dyn TagRepository>,
     recycle_factor: f64,
 }
 
@@ -48,6 +49,7 @@ impl CrawlAgentService {
         items: Arc<dyn ItemRepository>,
         ai: Arc<dyn AiGateway>,
         settings: Arc<dyn SettingsRepository>,
+        tags: Arc<dyn TagRepository>,
         recycle_factor: f64,
     ) -> Self {
         Self {
@@ -56,6 +58,7 @@ impl CrawlAgentService {
             items,
             ai,
             settings,
+            tags,
             recycle_factor,
         }
     }
@@ -107,10 +110,19 @@ impl CrawlAgentService {
             )
         };
 
-        let user = format!(
-            "目标商品：{}\n请搜索、筛选并提交最多 {MAX_SELECTED} 个有效在售商品。",
-            product.name.as_str()
-        );
+        let tag_names = self.tag_names(product.tag_ids.as_slice()).await;
+        let user = if tag_names.is_empty() {
+            format!(
+                "目标商品：{}\n请搜索、筛选并提交最多 {MAX_SELECTED} 个有效在售商品。",
+                product.name.as_str()
+            )
+        } else {
+            format!(
+                "目标商品：{}\n所属标签：{}\n请搜索、筛选并提交最多 {MAX_SELECTED} 个有效在售商品。",
+                product.name.as_str(),
+                tag_names.join("、")
+            )
+        };
 
         tracing::trace!("AI agent system prompt: {}", system);
         tracing::trace!("AI agent user prompt: {}", user);
@@ -128,6 +140,16 @@ impl CrawlAgentService {
         taken.ok_or_else(|| {
             DomainError::InvalidState("AI 未提交抓取结果（save_crawl_result 未被调用）".into())
         })
+    }
+
+    async fn tag_names(&self, tag_ids: &[i64]) -> Vec<String> {
+        let mut names = Vec::with_capacity(tag_ids.len());
+        for id in tag_ids {
+            if let Ok(Some(tag)) = self.tags.find(*id).await {
+                names.push(tag.name.as_str().to_string());
+            }
+        }
+        names
     }
 }
 

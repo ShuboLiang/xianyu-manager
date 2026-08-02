@@ -119,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
             item_repo.clone(),
             ai_gateway,
             settings_repo.clone(),
+            tag_repo.clone(),
             config.recycle_factor,
         ))
     });
