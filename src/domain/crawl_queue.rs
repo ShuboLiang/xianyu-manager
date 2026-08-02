@@ -65,17 +65,23 @@ impl Selector {
 
     fn check_tags(&self, ids: &[i64], product: &Product, mode: TagMatch) -> bool {
         let (real_tags, no_tag_present) = self.split_sentinel(ids);
-        let mut ok = true;
-        if no_tag_present {
-            ok = product.tag_ids.is_empty();
+        match mode {
+            TagMatch::All => {
+                if no_tag_present && !product.tag_ids.is_empty() {
+                    return false;
+                }
+                real_tags.iter().all(|t| product.tag_ids.contains(t))
+            }
+            TagMatch::Any => {
+                if no_tag_present && product.tag_ids.is_empty() {
+                    return true;
+                }
+                if real_tags.is_empty() {
+                    return false;
+                }
+                real_tags.iter().any(|t| product.tag_ids.contains(t))
+            }
         }
-        if ok && !real_tags.is_empty() {
-            ok = match mode {
-                TagMatch::All => real_tags.iter().all(|t| product.tag_ids.contains(t)),
-                TagMatch::Any => real_tags.iter().any(|t| product.tag_ids.contains(t)),
-            };
-        }
-        ok
     }
 
     fn check_exclude(&self, ids: &[i64], product: &Product) -> bool {
