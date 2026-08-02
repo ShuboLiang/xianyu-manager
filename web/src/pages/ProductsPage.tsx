@@ -567,7 +567,10 @@ export function ProductsPage() {
                 clearChecked();
                 setQuery((q) => ({ ...q, page: 1, tagId: v ?? null }));
               }}
-              options={tags.map((t) => ({ label: t.name, value: t.id }))}
+              options={[
+                { label: '无标签', value: -1 },
+                ...tags.map((t) => ({ label: t.name, value: t.id })),
+              ]}
             />
             {checkedCount > 0 && (
               <>

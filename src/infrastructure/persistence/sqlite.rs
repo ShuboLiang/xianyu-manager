@@ -419,9 +419,16 @@ impl ProductRepository for SqliteProductRepository {
             where_parts.push(format!("p.name LIKE '%{q}%'"));
         }
         if let Some(tid) = tag_id {
-            where_parts.push(format!(
-                "EXISTS (SELECT 1 FROM product_tags pt WHERE pt.product_id = p.id AND pt.tag_id = {tid})"
-            ));
+            if tid == -1 {
+                where_parts.push(
+                    "NOT EXISTS (SELECT 1 FROM product_tags pt WHERE pt.product_id = p.id)"
+                        .to_string(),
+                );
+            } else {
+                where_parts.push(format!(
+                    "EXISTS (SELECT 1 FROM product_tags pt WHERE pt.product_id = p.id AND pt.tag_id = {tid})"
+                ));
+            }
         }
         let where_clause = if where_parts.is_empty() {
             String::new()
