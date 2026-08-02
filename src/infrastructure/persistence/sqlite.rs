@@ -404,6 +404,7 @@ impl ProductRepository for SqliteProductRepository {
         limit: u64,
         sort: Option<(ProductSortColumn, bool)>,
         search: Option<&str>,
+        tag_id: Option<i64>,
     ) -> Result<Page<Product>, DomainError> {
         let order_by = match sort {
             Some((col, desc)) => format!(
@@ -413,14 +414,21 @@ impl ProductRepository for SqliteProductRepository {
             ),
             None => "ORDER BY p.created_at ASC".to_string(),
         };
-        let (where_clause, count_sql) = match search {
-            Some(q) => {
-                let w = format!("WHERE p.name LIKE '%{q}%'");
-                let c = format!("SELECT COUNT(*) AS c FROM products p {w}");
-                (w, c)
-            }
-            None => (String::new(), "SELECT COUNT(*) AS c FROM products".to_string()),
+        let mut where_parts: Vec<String> = Vec::new();
+        if let Some(q) = search {
+            where_parts.push(format!("p.name LIKE '%{q}%'"));
+        }
+        if let Some(tid) = tag_id {
+            where_parts.push(format!(
+                "EXISTS (SELECT 1 FROM product_tags pt WHERE pt.product_id = p.id AND pt.tag_id = {tid})"
+            ));
+        }
+        let where_clause = if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_parts.join(" AND "))
         };
+        let count_sql = format!("SELECT COUNT(*) AS c FROM products p {where_clause}");
         let rows = sqlx::query(&format!(
             "{PRODUCT_SELECT} {where_clause} {order_by} LIMIT ? OFFSET ?"
         ))

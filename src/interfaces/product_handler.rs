@@ -23,7 +23,7 @@ pub async fn list_products(
     let (page, page_size) = normalize_page(q.page, q.page_size);
     match state
         .product_service
-        .list_paginated(page, page_size, q.sort_by, q.sort_dir, q.search)
+        .list_paginated(page, page_size, q.sort_by, q.sort_dir, q.search, q.tag_id)
         .await
     {
         Ok(p) => {

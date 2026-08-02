@@ -15,4 +15,8 @@ sort_dir: string | null,
 /**
  * 商品名模糊搜索
  */
-search: string | null, };
+search: string | null, 
+/**
+ * 按标签过滤（标签 id）
+ */
+tag_id: number | null, };

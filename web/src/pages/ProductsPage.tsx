@@ -40,6 +40,7 @@ interface ProductsQuery {
   sortBy: SortKey | null;
   sortDir: 'asc' | 'desc';
   search: string;
+  tagId: number | null;
 }
 
 const TERMINAL_TASK_STATUS = ['done', 'failed', 'cancelled'];
@@ -69,6 +70,7 @@ export function ProductsPage() {
     sortBy: null,
     sortDir: 'desc',
     search: '',
+    tagId: null,
   });
 
   const params = new URLSearchParams({ page: String(query.page), page_size: String(query.pageSize) });
@@ -77,6 +79,7 @@ export function ProductsPage() {
     params.set('sort_dir', query.sortDir);
   }
   if (query.search) params.set('search', query.search);
+  if (query.tagId !== null) params.set('tag_id', String(query.tagId));
 
   const { data, isLoading } = useQuery({
     queryKey: ['products', query],
@@ -506,6 +509,14 @@ export function ProductsPage() {
               placeholder="搜索商品名"
               style={{ width: 280 }}
               onSearch={(v) => setQuery((q) => ({ ...q, page: 1, search: v.trim() }))}
+            />
+            <Select
+              allowClear
+              placeholder="按标签筛选"
+              style={{ minWidth: 160 }}
+              value={query.tagId}
+              onChange={(v) => setQuery((q) => ({ ...q, page: 1, tagId: v ?? null }))}
+              options={tags.map((t) => ({ label: t.name, value: t.id }))}
             />
             {checkedIds.length > 0 && (
               <>

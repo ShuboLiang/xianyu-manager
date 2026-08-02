@@ -107,6 +107,7 @@ pub trait ProductRepository: Send + Sync {
         limit: u64,
         sort: Option<(ProductSortColumn, bool)>,
         search: Option<&str>,
+        tag_id: Option<i64>,
     ) -> Result<Page<Product>, DomainError>;
     /// 使用某个标签的全部商品（用于删除标签前的影响提示）
     async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError>;

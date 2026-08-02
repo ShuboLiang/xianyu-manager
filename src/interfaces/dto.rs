@@ -527,6 +527,9 @@ pub struct ProductListQuery {
     pub sort_dir: Option<String>,
     /// 商品名模糊搜索
     pub search: Option<String>,
+    /// 按标签过滤（标签 id）
+    #[ts(type = "number | null")]
+    pub tag_id: Option<i64>,
 }
 
 /// 分页响应（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）
