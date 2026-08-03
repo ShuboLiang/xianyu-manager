@@ -75,6 +75,7 @@ impl RigAiGateway {
                 updated_at: now,
             });
         }
+        tracing::warn!("AI 功能未配置：无数据库默认 provider，也未设置 AI_API_KEY 环境变量");
         Err(DomainError::InvalidState("AI 功能未配置".into()))
     }
 
@@ -144,6 +145,10 @@ async fn execute_tool(
 
 #[async_trait]
 impl AiGateway for RigAiGateway {
+    async fn is_available(&self) -> bool {
+        self.resolve_provider().await.is_ok()
+    }
+
     async fn complete(&self, system: &str, user: &str) -> Result<String, DomainError> {
         let provider = self.resolve_provider().await?;
         self.complete_with(&provider, system, user).await
@@ -313,6 +318,10 @@ pub struct MockAiGateway;
 
 #[async_trait]
 impl AiGateway for MockAiGateway {
+    async fn is_available(&self) -> bool {
+        true
+    }
+
     async fn complete(&self, _system: &str, _user: &str) -> Result<String, DomainError> {
         Ok("mock-complete".into())
     }

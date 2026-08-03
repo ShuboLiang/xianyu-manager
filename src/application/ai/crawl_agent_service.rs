@@ -64,6 +64,10 @@ impl CrawlAgentService {
     }
 
     /// 抓取一个商品：跑一轮 AI agent，返回落库的统计结果
+    pub async fn check_ai_available(&self) -> bool {
+        self.ai.is_available().await
+    }
+
     pub async fn crawl_product(&self, product: &Product) -> Result<CrawlOutcome, DomainError> {
         tracing::debug!("开始为商品 {} 跑 AI 抓取 agent", product.id);
         // 工具执行与 agent 循环在同一线程串行，std Mutex 即可（不在 await 间持锁）
@@ -370,7 +374,7 @@ impl AiTool for SaveCrawlResultTool {
                 f
             }
         };
-        let recycle = median * factor;
+        let recycle = (median * factor).floor();
 
         let mut product = self
             .products

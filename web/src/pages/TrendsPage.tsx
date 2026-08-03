@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { App as AntApp, Button, Card, Empty, Select, Space, Spin, Tag } from 'antd';
+import { App as AntApp, Button, Card, Empty, Select, Space, Spin, Tag, theme as antdTheme } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import {
   CartesianGrid,
@@ -22,6 +22,8 @@ const COLORS = [
 
 export function TrendsPage() {
   const { message } = AntApp.useApp();
+  // recharts 不感知 antd 主题，坐标轴/网格/提示框颜色需要手动接 token，否则深色模式下对比度不足
+  const { token } = antdTheme.useToken();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [series, setSeries] = useState<PriceTrendSeries[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
@@ -116,20 +118,35 @@ export function TrendsPage() {
             <div style={{ height: 320 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={token.colorSplit} />
                   <XAxis
                     dataKey="ts"
                     tickFormatter={(v: number) =>
                       new Date(v * 1000).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
                     }
-                    fontSize={12}
+                    tick={{ fill: token.colorTextSecondary, fontSize: 12 }}
+                    axisLine={{ stroke: token.colorBorderSecondary }}
+                    tickLine={{ stroke: token.colorBorderSecondary }}
                   />
-                  <YAxis tickFormatter={(v: number) => `¥${v.toFixed(0)}`} fontSize={12} />
+                  <YAxis
+                    tickFormatter={(v: number) => `¥${v.toFixed(0)}`}
+                    tick={{ fill: token.colorTextSecondary, fontSize: 12 }}
+                    axisLine={{ stroke: token.colorBorderSecondary }}
+                    tickLine={{ stroke: token.colorBorderSecondary }}
+                  />
                   <Tooltip
                     labelFormatter={(v: number) => new Date(v * 1000).toLocaleString('zh-CN', { hour12: false })}
                     formatter={(value: number) => [`¥${value.toFixed(2)}`, undefined]}
+                    contentStyle={{
+                      background: token.colorBgElevated,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: token.borderRadius,
+                    }}
+                    labelStyle={{ color: token.colorText }}
+                    itemStyle={{ color: token.colorTextSecondary }}
+                    cursor={{ stroke: token.colorBorderSecondary }}
                   />
-                  {displayProdNames.length > 1 && <Legend />}
+                  {displayProdNames.length > 1 && <Legend wrapperStyle={{ color: token.colorTextSecondary }} />}
                   {displayProdNames.map((name, i) => (
                     <Line
                       key={name}

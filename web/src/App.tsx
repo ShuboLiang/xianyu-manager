@@ -48,6 +48,15 @@ export default function App() {
           colorLinkActive: '#0958d9',
           borderRadius: 6,
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif`,
+          // 深色模式：antd 默认底色是纯黑（#000），生硬刺眼；
+          // 整体抬升为 Material 系深灰（底 #121212 / 卡片 #1e1e1e / 浮层 #262626），更柔和且卡片仍可分辨
+          ...(mode === 'dark'
+            ? {
+                colorBgLayout: '#121212',
+                colorBgContainer: '#1e1e1e',
+                colorBgElevated: '#262626',
+              }
+            : {}),
         },
       }}
     >

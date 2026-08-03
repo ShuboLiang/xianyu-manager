@@ -86,7 +86,7 @@ impl Product {
         self.median_price = Some(median_price);
         self.avg_price = Some(avg_price);
         self.crawled_count = Some(crawled_count);
-        self.recycle_price = Some(recycle_price);
+        self.recycle_price = Some(recycle_price.floor());
         self.last_crawled_at = Some(now_unix());
         self.touch();
     }

@@ -30,6 +30,9 @@ pub struct AiEnvFallback {
 #[allow(dead_code)]
 #[async_trait]
 pub trait AiGateway: Send + Sync {
+    /// 检查 AI 是否可用（已配置 DB 默认 provider 或环境变量兜底）
+    async fn is_available(&self) -> bool;
+
     /// 档位 1：单次对话补全
     async fn complete(&self, system: &str, user: &str) -> Result<String, DomainError>;
 

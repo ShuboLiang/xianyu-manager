@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$outDir = "C:\Users\liang\Desktop\闲鱼管理台"
+$outDir = ".\闲鱼管理台"
 $bin = "xianyu-manager.exe"
 $static = "static"
 

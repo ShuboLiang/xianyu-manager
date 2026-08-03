@@ -110,6 +110,19 @@ impl QueueService {
 
     // ---------- 入队 ----------
 
+    /// AI 抓取路径下，入队前卡 AI 是否已配置；非 AI 路径（mock 等）直接通过
+    async fn ensure_ai_available(&self) -> Result<(), DomainError> {
+        if let Some(agent) = &self.crawl_agent {
+            if !agent.check_ai_available().await {
+                tracing::warn!("拒绝入队：当前网关模式使用 AI 抓取，但 AI 未配置（无数据库默认 provider 也未设置 AI_API_KEY）");
+                return Err(DomainError::InvalidState(
+                    "AI 未配置：请在「AI 配置」页设置 API 接口，或设置 AI_API_KEY 环境变量后重启".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub async fn preview(&self, target: EnqueueTarget) -> Result<PreviewResult, DomainError> {
         let candidates = self.resolve_targets(&target).await?;
         let candidates_len = candidates.len();
@@ -131,6 +144,7 @@ impl QueueService {
         target: EnqueueTarget,
         interval_secs: u32,
     ) -> Result<(CrawlQueue, PreviewResult), DomainError> {
+        self.ensure_ai_available().await?;
         let preview = self.preview(target).await?;
         if preview.to_add.is_empty() {
             return Err(DomainError::InvalidInput(
@@ -158,6 +172,7 @@ impl QueueService {
         queue_id: i64,
         target: EnqueueTarget,
     ) -> Result<PreviewResult, DomainError> {
+        self.ensure_ai_available().await?;
         let queue = self
             .queues
             .find_queue(queue_id)
@@ -387,7 +402,7 @@ impl QueueService {
             Err(EntryFailure::Failed(msg)) => {
                 entry.status = EntryStatus::Failed;
                 entry.error = Some(msg.clone());
-                tracing::debug!("条目 #{} 失败: {}", entry.id, msg);
+                tracing::warn!("条目 #{} 失败: {}", entry.id, msg);
             }
         }
         if let Err(e) = self.queues.update_entry(&entry).await {
@@ -458,7 +473,7 @@ impl QueueService {
 
         // 回收价本期用均价占位（见方案 6 节）
         let mut product = product;
-        product.record_crawl_result(median, avg, count as u32, avg);
+        product.record_crawl_result(median, avg, count as u32, avg.floor());
         self.products
             .update(&product)
             .await

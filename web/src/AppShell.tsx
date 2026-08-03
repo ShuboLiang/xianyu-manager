@@ -141,8 +141,13 @@ export function AppShell() {
           width={200}
           breakpoint="lg"
           collapsedWidth={0}
-          theme={mode === 'dark' ? 'dark' : 'light'}
-          style={{ borderRight: `1px solid ${token.colorBorderSecondary}` }}
+          // 不用 theme="dark"：那是 antd 旧版深蓝（#001529）菜单，与 darkAlgorithm 的中性深色不协调；
+          // light 主题走 cssVar，深浅色下都自动取 colorBgContainer
+          theme="light"
+          style={{
+            background: token.colorBgContainer,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+          }}
         >
           <div style={{ padding: '16px 20px 12px' }}>
             <div style={{ fontSize: 16, fontWeight: 600 }}>闲鱼管理台</div>
@@ -152,11 +157,11 @@ export function AppShell() {
           </div>
           <Menu
             mode="inline"
-            theme={mode === 'dark' ? 'dark' : 'light'}
+            theme="light"
             selectedKeys={[selectedKey]}
             items={NAV_ITEMS}
             onClick={({ key }) => navigate(key)}
-            style={{ borderInlineEnd: 'none' }}
+            style={{ borderInlineEnd: 'none', background: 'transparent' }}
           />
         </Layout.Sider>
 
