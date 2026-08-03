@@ -111,6 +111,30 @@ impl ItemRepository for InMemoryItemRepository {
         }
         Ok(())
     }
+
+    async fn delete(&self, id: &str) -> Result<bool, DomainError> {
+        let mut guard = self
+            .items
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        let before = guard.len();
+        guard.retain(|i| i.id != id);
+        Ok(guard.len() < before)
+    }
+
+    async fn delete_matching(&self, search: Option<&str>) -> Result<u64, DomainError> {
+        // 内存实现是备选方案：无商品表可联查，搜索只匹配标题
+        let mut guard = self
+            .items
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        let before = guard.len();
+        match search {
+            Some(q) => guard.retain(|i| !i.title.contains(q)),
+            None => guard.clear(),
+        }
+        Ok((before - guard.len()) as u64)
+    }
 }
 
 #[derive(Default)]

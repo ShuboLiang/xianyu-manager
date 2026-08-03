@@ -71,6 +71,10 @@ pub trait ItemRepository: Send + Sync {
     async fn list_by_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError>;
     /// 解除抓取记录与商品的归属（product_id 置空）；删除商品前调用，避免悬空引用
     async fn detach_product(&self, product_ids: &[i64]) -> Result<(), DomainError>;
+    /// 删除单条抓取记录，返回是否真的删除了记录
+    async fn delete(&self, id: &str) -> Result<bool, DomainError>;
+    /// 按搜索条件批量删除（语义同 list_paginated 的 search；None = 清空全部），返回删除条数
+    async fn delete_matching(&self, search: Option<&str>) -> Result<u64, DomainError>;
 }
 
 #[async_trait]

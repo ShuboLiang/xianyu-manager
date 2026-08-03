@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
-use axum::extract::{Json, Query, State};
+use axum::extract::{Json, Path, Query, State};
 
-use super::dto::{ApiResponse, ItemListQuery, ItemResponse, PageResponse};
+use super::dto::{
+    ApiResponse, ItemBatchDeletePreviewResponse, ItemBatchDeleteRequest,
+    ItemBatchDeleteResponse, ItemListQuery, ItemResponse, PageResponse,
+};
 use super::AppState;
 
 /// 分页参数钳制：page ≥ 1，page_size ∈ [1, 100]，默认 20
@@ -55,4 +58,40 @@ async fn resolve_product_names(
         }
     }
     map
+}
+
+/// DELETE /api/items/{id}：删除单条抓取记录
+pub async fn delete_item(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<ApiResponse<()>> {
+    match state.item_service.delete_item(&id).await {
+        Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/items/batch-delete/preview：预览按搜索条件批量删除（空 search = 全部）
+pub async fn preview_batch_delete(
+    State(state): State<AppState>,
+    Json(req): Json<ItemBatchDeleteRequest>,
+) -> Json<ApiResponse<ItemBatchDeletePreviewResponse>> {
+    match state.item_service.preview_delete_matching(req.search).await {
+        Ok(preview) => Json(ApiResponse::ok(ItemBatchDeletePreviewResponse {
+            total: preview.total,
+            sample: preview.sample,
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/items/batch-delete：按搜索条件批量删除抓取记录（空 search = 清空全部）
+pub async fn batch_delete_items(
+    State(state): State<AppState>,
+    Json(req): Json<ItemBatchDeleteRequest>,
+) -> Json<ApiResponse<ItemBatchDeleteResponse>> {
+    match state.item_service.delete_matching(req.search).await {
+        Ok(deleted) => Json(ApiResponse::ok(ItemBatchDeleteResponse { deleted })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
 }

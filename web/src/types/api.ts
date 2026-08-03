@@ -61,6 +61,8 @@ export type QueueProgress = Omit<QueueResponse, 'status'> & { status: QueueStatu
 export type { BatchSkippedItem } from './generated/BatchSkippedItem';
 export type { ClassifyProductsResponse } from './generated/ClassifyProductsResponse';
 export type { EnqueueResponse } from './generated/EnqueueResponse';
+export type { ItemBatchDeletePreviewResponse } from './generated/ItemBatchDeletePreviewResponse';
+export type { ItemBatchDeleteResponse } from './generated/ItemBatchDeleteResponse';
 export type { PreviewResponse } from './generated/PreviewResponse';
 export type { PriceTrendPoint } from './generated/PriceTrendPoint';
 export type { PriceTrendSeries } from './generated/PriceTrendSeries';

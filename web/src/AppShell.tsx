@@ -185,6 +185,7 @@ export function AppShell() {
                 size="small"
                 icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
                 onClick={toggle}
+                style={{ width: 32 }}
               />
             </Tooltip>
           </Layout.Header>

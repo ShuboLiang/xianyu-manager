@@ -35,4 +35,46 @@ impl ItemService {
     pub async fn latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError> {
         self.items.list_latest_for_product(product_id).await
     }
+
+    pub async fn delete_item(&self, id: &str) -> Result<(), DomainError> {
+        if !self.items.delete(id).await? {
+            return Err(DomainError::NotFound(format!("抓取记录 {id}")));
+        }
+        Ok(())
+    }
+
+    /// 预览「按搜索条件批量删除」：命中总数 + 前几条标题样本
+    pub async fn preview_delete_matching(
+        &self,
+        search: Option<String>,
+    ) -> Result<ItemDeletePreview, DomainError> {
+        let search_str = normalize_search(search.as_deref());
+        let page = self.items.list_paginated(0, 10, search_str).await?;
+        Ok(ItemDeletePreview {
+            total: page.total,
+            sample: page.items.into_iter().map(|i| i.title).collect(),
+        })
+    }
+
+    /// 按搜索条件批量删除（None = 清空全部），返回删除条数
+    pub async fn delete_matching(&self, search: Option<String>) -> Result<u64, DomainError> {
+        self.items
+            .delete_matching(normalize_search(search.as_deref()))
+            .await
+    }
+}
+
+/// 批量删除预览：命中总数 + 标题样本
+#[derive(Debug)]
+pub struct ItemDeletePreview {
+    pub total: u64,
+    pub sample: Vec<String>,
+}
+
+/// 空白的搜索词视为没有搜索条件
+fn normalize_search(search: Option<&str>) -> Option<&str> {
+    search.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    })
 }

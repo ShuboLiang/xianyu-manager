@@ -1120,6 +1120,29 @@ impl ItemRepository for SqliteItemRepository {
         query.execute(&self.pool).await.map_err(to_infra)?;
         Ok(())
     }
+
+    async fn delete(&self, id: &str) -> Result<bool, DomainError> {
+        let result = sqlx::query("DELETE FROM items WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_matching(&self, search: Option<&str>) -> Result<u64, DomainError> {
+        // WHERE 语义与 list_paginated 的 search 一致（标题或所属商品名模糊匹配），
+        // SQLite 的 DELETE 不支持 JOIN，商品名条件改用子查询表达
+        let sql = match search {
+            Some(q) => format!(
+                "DELETE FROM items WHERE title LIKE '%{q}%'
+                 OR product_id IN (SELECT id FROM products WHERE name LIKE '%{q}%')"
+            ),
+            None => "DELETE FROM items".to_string(),
+        };
+        let result = sqlx::query(&sql).execute(&self.pool).await.map_err(to_infra)?;
+        Ok(result.rows_affected())
+    }
 }
 
 fn row_to_item(row: &SqliteRow) -> Item {

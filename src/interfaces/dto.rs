@@ -90,6 +90,29 @@ impl From<Item> for ItemResponse {
     }
 }
 
+/// 抓取数据批量删除请求：search 与列表搜索同语义，空 = 清空全部
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ItemBatchDeleteRequest {
+    pub search: Option<String>,
+}
+
+/// 抓取数据批量删除预览：命中总数 + 标题样本（前 10 条）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ItemBatchDeletePreviewResponse {
+    #[ts(type = "number")]
+    pub total: u64,
+    pub sample: Vec<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ItemBatchDeleteResponse {
+    #[ts(type = "number")]
+    pub deleted: u64,
+}
+
 // ---------- 标签 ----------
 
 #[derive(Debug, Deserialize, TS)]

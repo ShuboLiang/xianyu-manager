@@ -11,7 +11,7 @@ pub mod tag_handler;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -57,6 +57,12 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route("/crawl", post(crawl_handler::start_crawl))
         .route("/crawl/{id}", get(crawl_handler::get_task))
         .route("/items", get(item_handler::list_items))
+        .route(
+            "/items/batch-delete/preview",
+            post(item_handler::preview_batch_delete),
+        )
+        .route("/items/batch-delete", post(item_handler::batch_delete_items))
+        .route("/items/{id}", delete(item_handler::delete_item))
         .route("/tags", get(tag_handler::list_tags).post(tag_handler::create_tag))
         .route(
             "/tags/{id}",
