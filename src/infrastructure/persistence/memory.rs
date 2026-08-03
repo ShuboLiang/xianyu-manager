@@ -98,6 +98,19 @@ impl ItemRepository for InMemoryItemRepository {
         items.sort_by_key(|i| i.crawled_at);
         Ok(items)
     }
+
+    async fn detach_product(&self, product_ids: &[i64]) -> Result<(), DomainError> {
+        let mut guard = self
+            .items
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        for item in guard.iter_mut() {
+            if item.product_id.is_some_and(|pid| product_ids.contains(&pid)) {
+                item.product_id = None;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]

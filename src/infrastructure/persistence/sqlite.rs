@@ -506,6 +506,20 @@ impl ProductRepository for SqliteProductRepository {
             .map_err(to_infra)?;
         Ok(result.rows_affected() > 0)
     }
+
+    async fn delete_by_ids(&self, ids: &[i64]) -> Result<u64, DomainError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("DELETE FROM products WHERE id IN ({placeholders})");
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id);
+        }
+        let result = query.execute(&self.pool).await.map_err(to_infra)?;
+        Ok(result.rows_affected())
+    }
 }
 
 impl SqliteProductRepository {
@@ -1089,6 +1103,22 @@ impl ItemRepository for SqliteItemRepository {
         .await
         .map_err(to_infra)?;
         Ok(rows.iter().map(row_to_item).collect())
+    }
+
+    async fn detach_product(&self, product_ids: &[i64]) -> Result<(), DomainError> {
+        if product_ids.is_empty() {
+            return Ok(());
+        }
+        let placeholders = vec!["?"; product_ids.len()].join(",");
+        let sql = format!(
+            "UPDATE items SET product_id = NULL WHERE product_id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql);
+        for id in product_ids {
+            query = query.bind(id);
+        }
+        query.execute(&self.pool).await.map_err(to_infra)?;
+        Ok(())
     }
 }
 

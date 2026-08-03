@@ -582,6 +582,31 @@ pub struct ProductBatchCreateResponse {
     pub skipped: Vec<BatchSkippedItem>,
 }
 
+/// 按标签批量删除商品请求
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ProductBatchDeleteRequest {
+    #[ts(type = "number")]
+    pub tag_id: i64,
+}
+
+/// 批量删除预览：命中商品 + 其中处于活跃队列的数量（仅提示，不阻止）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ProductBatchDeletePreviewResponse {
+    pub total: usize,
+    pub products: Vec<ProductBriefResponse>,
+    #[ts(type = "number")]
+    pub in_active_queues: u64,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ProductBatchDeleteResponse {
+    #[ts(type = "number")]
+    pub deleted: u64,
+}
+
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct BatchSkippedItem {

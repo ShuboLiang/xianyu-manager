@@ -17,7 +17,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/PageHeader';
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/api';
 import { useTags } from '@/lib/queries';
-import type { ProductBrief, Tag as TagType } from '@/types/api';
+import type {
+  ProductBatchDeletePreviewResponse,
+  ProductBatchDeleteResponse,
+  ProductBrief,
+  Tag as TagType,
+} from '@/types/api';
 
 const TAG_COLORS = ['blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'geekblue', 'volcano'];
 
@@ -118,6 +123,61 @@ export function TagsPage() {
     });
   };
 
+  const removeProducts = async (tag: TagType) => {
+    // 先预览命中商品与活跃队列占用，确认后执行批量删除（抓取历史保留）
+    let preview: ProductBatchDeletePreviewResponse;
+    try {
+      preview = await apiPost<ProductBatchDeletePreviewResponse>(
+        '/api/products/batch-delete/preview',
+        { tag_id: tag.id },
+      );
+    } catch (e) {
+      message.error(`预览失败: ${(e as Error).message}`);
+      return;
+    }
+    if (preview.total === 0) {
+      message.info(`标签「${tag.name}」下没有商品`);
+      return;
+    }
+    modal.confirm({
+      title: `删除标签「${tag.name}」下的全部商品？`,
+      content: (
+        <div>
+          <p>
+            将删除 {preview.total} 个商品（标签本身保留，已抓取的历史数据保留）：
+          </p>
+          <ul style={{ maxHeight: 160, overflowY: 'auto', paddingLeft: 18, margin: 0 }}>
+            {preview.products.slice(0, 10).map((p) => (
+              <li key={p.id}>{p.name}</li>
+            ))}
+            {preview.total > 10 && <li>… 等 {preview.total} 个</li>}
+          </ul>
+          {preview.in_active_queues > 0 && (
+            <Typography.Text type="warning">
+              其中 {preview.in_active_queues} 个商品在活跃队列中，轮到时会自动跳过。
+            </Typography.Text>
+          )}
+        </div>
+      ),
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res = await apiPost<ProductBatchDeleteResponse>('/api/products/batch-delete', {
+            tag_id: tag.id,
+          });
+          message.success(`已删除 ${res.deleted} 个商品`);
+          onChanged();
+          queryClient.invalidateQueries({ queryKey: ['stats'] });
+          queryClient.invalidateQueries({ queryKey: ['items'] });
+        } catch (e) {
+          message.error(`删除失败: ${(e as Error).message}`);
+        }
+      },
+    });
+  };
+
   return (
     <div>
       <PageHeader
@@ -165,7 +225,7 @@ export function TagsPage() {
             {
               title: '操作',
               key: 'actions',
-              width: 130,
+              width: 200,
               render: (_, t) => (
                 <Space split={<Typography.Text type="secondary">|</Typography.Text>} size={2}>
                   <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openEdit(t.id)}>
@@ -173,6 +233,15 @@ export function TagsPage() {
                   </Button>
                   <Button type="link" size="small" danger style={{ padding: 0 }} onClick={() => remove(t)}>
                     删除
+                  </Button>
+                  <Button
+                    type="link"
+                    size="small"
+                    danger
+                    style={{ padding: 0 }}
+                    onClick={() => removeProducts(t)}
+                  >
+                    删除商品
                   </Button>
                 </Space>
               ),

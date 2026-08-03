@@ -8,7 +8,8 @@ use crate::domain::product::Product;
 
 use super::dto::{
     ApiResponse, PageResponse, PriceTrendPoint, PriceTrendQuery, PriceTrendSeries,
-    ProductBatchCreateRequest, ProductBatchCreateResponse,
+    ProductBatchCreateRequest, ProductBatchCreateResponse, ProductBatchDeletePreviewResponse,
+    ProductBatchDeleteRequest, ProductBatchDeleteResponse, ProductBriefResponse,
     ProductCreateRequest, ProductListQuery, ProductResponse, ProductUpdateRequest,
     BatchSkippedItem,
 };
@@ -130,6 +131,43 @@ pub async fn delete_product(
 ) -> Json<ApiResponse<()>> {
     match state.product_service.delete_product(id).await {
         Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/products/batch-delete/preview：预览「删除某标签下全部商品」
+pub async fn preview_batch_delete(
+    State(state): State<AppState>,
+    Json(req): Json<ProductBatchDeleteRequest>,
+) -> Json<ApiResponse<ProductBatchDeletePreviewResponse>> {
+    match state
+        .product_service
+        .preview_batch_delete_by_tag(req.tag_id)
+        .await
+    {
+        Ok(preview) => Json(ApiResponse::ok(ProductBatchDeletePreviewResponse {
+            total: preview.products.len(),
+            products: preview
+                .products
+                .into_iter()
+                .map(|p| ProductBriefResponse {
+                    id: p.id,
+                    name: p.name.as_str().to_string(),
+                })
+                .collect(),
+            in_active_queues: preview.in_active_queues,
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/products/batch-delete：删除某标签下全部商品（抓取历史保留，仅解除归属）
+pub async fn batch_delete_products(
+    State(state): State<AppState>,
+    Json(req): Json<ProductBatchDeleteRequest>,
+) -> Json<ApiResponse<ProductBatchDeleteResponse>> {
+    match state.product_service.batch_delete_by_tag(req.tag_id).await {
+        Ok(deleted) => Json(ApiResponse::ok(ProductBatchDeleteResponse { deleted })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

@@ -69,6 +69,8 @@ pub trait ItemRepository: Send + Sync {
     async fn list_latest_for_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError>;
     /// 某商品的全部抓取记录，按 crawled_at 升序（价格趋势图用）
     async fn list_by_product(&self, product_id: i64) -> Result<Vec<Item>, DomainError>;
+    /// 解除抓取记录与商品的归属（product_id 置空）；删除商品前调用，避免悬空引用
+    async fn detach_product(&self, product_ids: &[i64]) -> Result<(), DomainError>;
 }
 
 #[async_trait]
@@ -114,6 +116,8 @@ pub trait ProductRepository: Send + Sync {
     async fn update(&self, product: &Product) -> Result<(), DomainError>;
     /// 返回是否真的删除了记录
     async fn delete(&self, id: i64) -> Result<bool, DomainError>;
+    /// 批量删除，返回实际删除条数
+    async fn delete_by_ids(&self, ids: &[i64]) -> Result<u64, DomainError>;
 }
 
 #[async_trait]

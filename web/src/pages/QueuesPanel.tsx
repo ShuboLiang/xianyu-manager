@@ -46,6 +46,12 @@ function fmtEta(seconds: number): string {
   return `${Math.floor(seconds / 3600)} 小时 ${Math.round((seconds % 3600) / 60)} 分`;
 }
 
+/** 名单摘要：最多列前 10 个名字，超出部分折叠为「等 N 个」（避免大量商品撑爆预览） */
+function summarizeNames(items: { name: string }[]): string {
+  const names = items.slice(0, 10).map((p) => p.name).join('、');
+  return items.length > 10 ? `${names} … 等 ${items.length} 个` : names;
+}
+
 export function QueuesPanel() {
   const { message, modal } = AntApp.useApp();
   const queryClient = useQueryClient();
@@ -61,8 +67,7 @@ export function QueuesPanel() {
     enqueue,
   } = useQueue();
 
-  const [selAll, setSelAll] = useState<number[]>([]);
-  const [selAny, setSelAny] = useState<number[]>([]);
+  const [selAll, setSelAll] = useState<number[]>([]);  const [selAny, setSelAny] = useState<number[]>([]);
   const [selExclude, setSelExclude] = useState<number[]>([]);
   const [staleDays, setStaleDays] = useState<number | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -418,17 +423,17 @@ export function QueuesPanel() {
                     <Alert
                       type="info"
                       message={
-                        <>
+                        <div style={{ maxHeight: 120, overflowY: 'auto' }}>
                           将新增 <b>{preview.to_add.length}</b> 个
-                          {preview.to_add.length > 0 && '：' + preview.to_add.map((p) => p.name).join('、')}
+                          {preview.to_add.length > 0 && '：' + summarizeNames(preview.to_add)}
                           {preview.skipped.length > 0 && (
                             <>
                               <br />
                               已在队列，跳过 <b>{preview.skipped.length}</b> 个：
-                              {preview.skipped.map((p) => p.name).join('、')}
+                              {summarizeNames(preview.skipped)}
                             </>
                           )}
-                        </>
+                        </div>
                       }
                     />
                   )}

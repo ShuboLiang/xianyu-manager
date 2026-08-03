@@ -77,7 +77,12 @@ async fn main() -> anyhow::Result<()> {
     let crawl_service = Arc::new(CrawlService::new(gateway.clone(), item_repo.clone(), task_repo));
     let item_service = Arc::new(ItemService::new(item_repo.clone()));
     let tag_service = Arc::new(TagService::new(tag_repo.clone()));
-    let product_service = Arc::new(ProductService::new(product_repo.clone(), tag_repo.clone()));
+    let product_service = Arc::new(ProductService::new(
+        product_repo.clone(),
+        tag_repo.clone(),
+        item_repo.clone(),
+        queue_repo.clone(),
+    ));
     let trend_service = Arc::new(TrendService::new(item_repo.clone(), product_repo.clone()));
 
     let ai_gateway: Arc<dyn crate::application::ports::AiGateway> = Arc::new(

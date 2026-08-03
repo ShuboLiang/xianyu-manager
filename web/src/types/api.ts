@@ -65,4 +65,6 @@ export type { PreviewResponse } from './generated/PreviewResponse';
 export type { PriceTrendPoint } from './generated/PriceTrendPoint';
 export type { PriceTrendSeries } from './generated/PriceTrendSeries';
 export type { ProductBatchCreateResponse } from './generated/ProductBatchCreateResponse';
+export type { ProductBatchDeletePreviewResponse } from './generated/ProductBatchDeletePreviewResponse';
+export type { ProductBatchDeleteResponse } from './generated/ProductBatchDeleteResponse';
 export type { TestConnectionResponse } from './generated/TestConnectionResponse';

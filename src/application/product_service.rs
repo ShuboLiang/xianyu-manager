@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use crate::domain::error::DomainError;
 use crate::domain::product::{NewProduct, Product, ProductName};
-use crate::domain::repository::{Page, ProductRepository, ProductSortColumn, TagRepository};
+use crate::domain::repository::{
+    ItemRepository, Page, ProductRepository, ProductSortColumn, QueueRepository, TagRepository,
+};
 
 /// 单次批量导入的数量上限
 const BATCH_CREATE_LIMIT: usize = 1000;
@@ -27,14 +29,33 @@ pub struct ProductPatch {
     pub recycle_price: Option<Option<f64>>,
 }
 
+/// 按标签批量删除的预览结果：命中商品 + 其中处于活跃队列的数量
+#[derive(Debug)]
+pub struct BatchDeletePreview {
+    pub products: Vec<Product>,
+    pub in_active_queues: u64,
+}
+
 pub struct ProductService {
     products: Arc<dyn ProductRepository>,
     tags: Arc<dyn TagRepository>,
+    items: Arc<dyn ItemRepository>,
+    queues: Arc<dyn QueueRepository>,
 }
 
 impl ProductService {
-    pub fn new(products: Arc<dyn ProductRepository>, tags: Arc<dyn TagRepository>) -> Self {
-        Self { products, tags }
+    pub fn new(
+        products: Arc<dyn ProductRepository>,
+        tags: Arc<dyn TagRepository>,
+        items: Arc<dyn ItemRepository>,
+        queues: Arc<dyn QueueRepository>,
+    ) -> Self {
+        Self {
+            products,
+            tags,
+            items,
+            queues,
+        }
     }
 
     pub async fn create_product(
@@ -202,10 +223,45 @@ impl ProductService {
     }
 
     pub async fn delete_product(&self, id: i64) -> Result<(), DomainError> {
+        // 先解除抓取记录的归属，避免 items.product_id 悬空
+        self.items.detach_product(&[id]).await?;
         if !self.products.delete(id).await? {
             return Err(DomainError::NotFound(format!("商品 {id}")));
         }
         Ok(())
+    }
+
+    /// 预览「删除某标签下全部商品」：命中商品 + 其中处于活跃队列的数量（仅提示，不阻止）
+    pub async fn preview_batch_delete_by_tag(
+        &self,
+        tag_id: i64,
+    ) -> Result<BatchDeletePreview, DomainError> {
+        if self.tags.find(tag_id).await?.is_none() {
+            return Err(DomainError::NotFound(format!("标签 {tag_id}")));
+        }
+        let products = self.products.list_by_tag(tag_id).await?;
+        let queued: std::collections::HashSet<i64> =
+            self.queues.queued_product_ids().await?.into_iter().collect();
+        let in_active_queues = products.iter().filter(|p| queued.contains(&p.id)).count() as u64;
+        Ok(BatchDeletePreview {
+            products,
+            in_active_queues,
+        })
+    }
+
+    /// 删除某标签下全部商品，返回删除条数。
+    /// 抓取历史（items）保留，仅解除归属；活跃队列中的条目由 worker 标记 skipped 兜底。
+    pub async fn batch_delete_by_tag(&self, tag_id: i64) -> Result<u64, DomainError> {
+        if self.tags.find(tag_id).await?.is_none() {
+            return Err(DomainError::NotFound(format!("标签 {tag_id}")));
+        }
+        let products = self.products.list_by_tag(tag_id).await?;
+        let ids: Vec<i64> = products.iter().map(|p| p.id).collect();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        self.items.detach_product(&ids).await?;
+        self.products.delete_by_ids(&ids).await
     }
 
     /// 校验商品名未被占用；exclude_id 用于更新时排除自身
