@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { App as AntApp, Button, Card, Input, Space, Table, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -21,6 +21,14 @@ export function ItemsPage() {
   const { message, modal } = AntApp.useApp();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState<ItemsQuery>({ page: 1, pageSize: 20, search: '' });
+
+  // 跨页选择：用 Set 记录所有已选 id（字符串），翻页不清空，搜索变更时清空
+  const checkedSetRef = useRef(new Set<string>());
+  const [checkedCount, setCheckedCount] = useState(0);
+  const addChecked = (id: string) => { checkedSetRef.current.add(id); setCheckedCount(checkedSetRef.current.size); };
+  const removeChecked = (id: string) => { checkedSetRef.current.delete(id); setCheckedCount(checkedSetRef.current.size); };
+  const clearChecked = () => { checkedSetRef.current.clear(); setCheckedCount(0); };
+  const getCheckedIds = () => Array.from(checkedSetRef.current);
 
   const params = new URLSearchParams({ page: String(query.page), page_size: String(query.pageSize) });
   if (query.search) params.set('search', query.search);
@@ -50,6 +58,42 @@ export function ItemsPage() {
           onChanged();
         } catch (e) {
           message.error(`删除失败: ${(e as Error).message}`);
+        }
+      },
+    });
+  };
+
+  const batchDelete = () => {
+    const ids = getCheckedIds();
+    if (ids.length === 0) {
+      message.error('请先勾选商品');
+      return;
+    }
+    modal.confirm({
+      title: `批量删除 ${ids.length} 条抓取记录`,
+      content: '删除后不可恢复，价格趋势图中对应数据点也会消失。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        let fail = 0;
+        const hide = message.loading(`正在删除 0/${ids.length}...`, 0);
+        for (let i = 0; i < ids.length; i++) {
+          hide();
+          const loading = message.loading(`正在删除 ${i + 1}/${ids.length}...`, 0);
+          try {
+            await apiDelete(`/api/items/${encodeURIComponent(ids[i])}`);
+          } catch {
+            fail++;
+          }
+          loading();
+        }
+        clearChecked();
+        onChanged();
+        if (fail > 0) {
+          message.warning(`删除完成，${fail}/${ids.length} 个失败`);
+        } else {
+          message.success(`已删除 ${ids.length} 条`);
         }
       },
     });
@@ -118,7 +162,10 @@ export function ItemsPage() {
               allowClear
               placeholder="搜索标题 / 商品名"
               style={{ width: 280 }}
-              onSearch={(v) => setQuery((q) => ({ ...q, page: 1, search: v.trim() }))}
+              onSearch={(v) => {
+                clearChecked();
+                setQuery((q) => ({ ...q, page: 1, search: v.trim() }));
+              }}
             />
             <Button
               icon={<ReloadOutlined />}
@@ -134,8 +181,36 @@ export function ItemsPage() {
         }
       />
       <Card>
-        <Table<Item>
-          rowKey="id"
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {checkedCount > 0 && (
+            <Space wrap size={12}>
+              <Typography.Text type="secondary">已选 {checkedCount} 项</Typography.Text>
+              <Button danger onClick={batchDelete}>批量删除</Button>
+              <Button type="text" onClick={clearChecked}>清除</Button>
+            </Space>
+          )}
+          <Table<Item>
+            rowKey="id"
+            rowSelection={{
+              selectedRowKeys: (data?.items ?? []).filter((it) => checkedSetRef.current.has(it.id)).map((it) => it.id),
+              onSelect: (record, selected) => {
+                if (selected) {
+                  addChecked(record.id);
+                } else {
+                  removeChecked(record.id);
+                }
+              },
+              onSelectAll: (selected, _selectedRows, changeRows) => {
+                for (const r of changeRows) {
+                  if (selected) {
+                    checkedSetRef.current.add(r.id);
+                  } else {
+                    checkedSetRef.current.delete(r.id);
+                  }
+                }
+                setCheckedCount(checkedSetRef.current.size);
+              },
+            }}
           loading={isLoading}
           dataSource={data?.items ?? []}
           locale={{
@@ -223,6 +298,7 @@ export function ItemsPage() {
             showTotal: (t) => `共 ${t} 条`,
           }}
         />
+        </Space>
       </Card>
     </div>
   );
