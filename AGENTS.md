@@ -48,9 +48,9 @@ src/
 │   ├── crawl_handler.rs #   POST /api/crawl、GET /api/crawl/{id}
 │   ├── item_handler.rs  #   GET /api/items（分页；normalize_page 钳制页码，供各 handler 复用）
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
-│   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）
+│   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）、GET /api/products/price-trend（趋势图）、GET /api/products/export（xlsx 导出）、POST /api/products/batch（批量导入）、POST /api/products/batch-delete(/preview)（按标签批删）
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
-│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）
+│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）
 │   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
@@ -62,6 +62,8 @@ src/
 │   ├── ai_provider_service.rs # AI 供应商配置管理 + 连通性测试
 │   ├── ai_settings_service.rs # AI 应用设置：用户自定义抓取提示词读写（存 app_settings KV 表）
 │   ├── ai_tool_call_service.rs # AI 工具调用审计查询（分页）
+│   ├── trend_service.rs #   价格趋势计算（按商品聚合 items 成 PriceTrendSeries）
+│   ├── cancel_token.rs  #   共享取消令牌存储（watch 信号，异步分类任务取消用）
 │   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（AI 驱动抓取 + 两个工具）
 │   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
 ├── domain/              # 领域层：零外部依赖
@@ -115,7 +117,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
 - **闲鱼网关是端口+实现（防腐层）**：`XianYuGateway` trait 定义在 `application/ports.rs`，实现（登录态、mtop 签名、解析）在 `infrastructure/xianyu_gateway.rs`。开发用 `GATEWAY=mock`。
 - **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。抓取商品数据（items 表，id=详情页 URL，重复抓取 INSERT OR REPLACE 覆盖）、标签、商品、队列、AI 配置/审计均已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）；抓取任务与 AI 分类任务仍是内存实现（重启即失，可接受）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
 - **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
-- **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null；**回收价例外地允许手动设置/清空**（更新接口 `recycle_price`：不传=不修改，null=清空，数值=设定，校验在 `Product::set_recycle_price`，下一轮爬取会覆盖手动值；前端商品表格回收价单元格行内编辑）。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
+- **待爬取商品管理**：商品（`domain/product.rs`）管理「要爬哪些商品」。基础信息：名称（唯一，冲突返回 `Conflict`）、标签（**多对多**，`tag_ids: Vec<i64>`，默认空=无标签；存 `product_tags` 关联表，删除商品或标签时外键 `ON DELETE CASCADE` 自动清理关联）、备注。支持**批量导入**（`POST /api/products/batch`，每行一个名称，可指定统一标签，返回成功/跳过明细）与 **xlsx 导出**（`GET /api/products/export`，rust_xlsxwriter 生成）。统计字段（中位数/均价/爬取数量/最后爬取时间/回收价格）由爬取结果写入（`Product::record_crawl_result`），未爬取时为 null；**回收价例外地允许手动设置/清空**（更新接口 `recycle_price`：不传=不修改，null=清空，数值=设定，校验在 `Product::set_recycle_price`，下一轮爬取会覆盖手动值；前端商品表格回收价单元格行内编辑）。更新接口的 `tag_ids`：不传=不修改，空数组=清空全部标签，非空数组=整体替换。
 - **删除语义**：数据库层一律 `CASCADE` 兜底（删标签/删商品只清关联，另一方不受影响）；交互层做影响提示——`GET /api/tags/{id}/products` 返回使用该标签的商品，前端删除标签前在确认框中列出受影响商品。不做「阻止删除」。
   - **删除商品不删抓取历史**：items 主键是详情页 URL、跨商品共享覆盖，不专属某个商品，所以删商品（单个或批量）时 items 一律保留，仅由 `ItemRepository::detach_product` 把 `items.product_id` 置 NULL 解除归属（避免悬空引用，抓取数据页商品名显示「-」）。
   - **按标签批量删除商品**：`POST /api/products/batch-delete/preview` 预览命中商品与活跃队列占用数（仅警告不阻止），`POST /api/products/batch-delete` 执行（入参 `{tag_id}`，标签本身保留）；活跃队列中的条目沿用 worker 标记 `skipped` 兜底。前端入口在标签管理页每行的「删除商品」。
@@ -135,7 +137,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
   - `AiGateway`/`AiTool` 端口在 `application/ports.rs`；真实实现 `RigAiGateway` 在 `infrastructure/ai_gateway.rs`，基于 `rig-core` 0.41 的 OpenAI 兼容端点（DeepSeek/千问/Kimi 等通用），手写 ReAct 工具循环。
   - AI 供应商配置入库管理（`ai_providers`）：前端「AI 接口管理」卡片可增删改查、设默认、测试连通性；密钥明文存本地 SQLite，响应掩码显示。优先级：**DB 默认配置 > `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 环境变量兜底**。
   - AI 工具可直接产生读写结果（完全自动，无人工确认）；每次工具执行落 `ai_tool_calls` 审计表（工具名/参数/结果或错误/耗时），前端「AI 工具调用记录」可回查。
-  - 当前未实现具体 AI 用例（智能建标签、商品分类等），基础设施已就绪，后续用例来了只需在 `application/ai/` 加 service 并注册工具。
+  - **AI 自动打标签用例**（`application/ai/classify_service.rs`，详细方案见 `docs/design-batch-import-ai-classify.md`）：传入商品 id 列表，AI 调 `list_tags` 等工具为商品匹配标签并写回。两条路径：`POST /api/ai/classify-products` 同步（单次上限 50 个）与 `POST /api/ai/classify-tasks` 异步任务（每批 50 个，内存仓储，可查进度、可取消——取消信号走 `cancel_token.rs` 的 watch 令牌）。后续新用例来了只需在 `application/ai/` 加 service 并注册工具。
 
 ## 扩展约定
 
