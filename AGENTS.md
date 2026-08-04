@@ -71,8 +71,10 @@ src/
 │   ├── product.rs       #   Product 实体（待爬取商品）：名称/标签/备注 + 爬取统计字段
 │   ├── crawl_queue.rs   #   CrawlQueue/CrawlEntry 实体、Selector 值对象、状态机（队列与条目的状态流转都只能走实体方法）
 │   ├── ai_provider.rs   #   AiProvider 实体（OpenAI 兼容端点配置）+ ProviderName/BaseUrl/ModelName 值对象
+│   ├── ai_classify_task.rs # AiClassifyTask 实体：自动打标签异步任务，状态机同 CrawlTask（内存仓储，重启即失）
 │   ├── ai_tool_call.rs  #   AiToolCall 审计实体
-│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiToolCallRepository / SettingsRepository（KV 设置）
+│   ├── price_trend.rs   #   PriceTrendPoint/PriceTrendSeries 只读结构（价格趋势图数据，无行为）
+│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiClassifyTaskRepository / AiToolCallRepository / SettingsRepository（KV 设置）
 │   └── error.rs         #   DomainError，全项目统一错误语义
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
