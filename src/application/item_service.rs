@@ -62,6 +62,28 @@ impl ItemService {
             .delete_matching(normalize_search(search.as_deref()))
             .await
     }
+
+    /// 预览「勾选批量删除」：实际存在的记录数 + 前 10 条标题样本
+    pub async fn preview_delete_by_ids(&self, ids: &[String]) -> Result<ItemDeletePreview, DomainError> {
+        if ids.is_empty() {
+            return Err(DomainError::InvalidInput("请先勾选要删除的记录".into()));
+        }
+        let found = self.items.list_by_ids(ids).await?;
+        Ok(ItemDeletePreview {
+            total: found.len() as u64,
+            sample: found.iter().take(10).map(|i| i.title.clone()).collect(),
+        })
+    }
+
+    /// 勾选批量删除：按 id 列表删除，返回实际删除条数
+    pub async fn delete_by_ids(&self, ids: &[String]) -> Result<u64, DomainError> {
+        if ids.is_empty() {
+            return Err(DomainError::InvalidInput("请先勾选要删除的记录".into()));
+        }
+        let deleted = self.items.delete_by_ids(ids).await?;
+        tracing::info!("勾选批量删除抓取记录：{deleted} 条");
+        Ok(deleted)
+    }
 }
 
 /// 批量删除预览：命中总数 + 标题样本

@@ -113,6 +113,13 @@ pub struct ItemBatchDeleteResponse {
     pub deleted: u64,
 }
 
+/// 抓取数据勾选批量删除请求（按 id 列表；id 是详情页 URL）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ItemBatchDeleteIdsRequest {
+    pub ids: Vec<String>,
+}
+
 // ---------- 标签 ----------
 
 #[derive(Debug, Deserialize, TS)]
@@ -671,6 +678,25 @@ pub struct ProductBatchDeletePreviewResponse {
 pub struct ProductBatchDeleteResponse {
     #[ts(type = "number")]
     pub deleted: u64,
+}
+
+/// 商品勾选批量删除请求（按 id 列表）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ProductBatchDeleteIdsRequest {
+    #[ts(type = "Array<number>")]
+    pub ids: Vec<i64>,
+}
+
+/// 商品勾选批量删除预览：实际存在的商品数 + 名称样本（前 10 条）+ 活跃队列占用数
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ProductBatchDeleteIdsPreviewResponse {
+    #[ts(type = "number")]
+    pub total: u64,
+    pub sample: Vec<String>,
+    #[ts(type = "number")]
+    pub in_active_queues: u64,
 }
 
 #[derive(Debug, Serialize, TS)]

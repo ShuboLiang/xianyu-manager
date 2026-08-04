@@ -63,37 +63,55 @@ export function ItemsPage() {
     });
   };
 
-  const batchDelete = () => {
+  const batchDelete = async () => {
     const ids = getCheckedIds();
     if (ids.length === 0) {
       message.error('请先勾选商品');
       return;
     }
+    // 先预览：实际存在的记录数 + 前 10 条标题样本，确认后一次请求删除
+    let preview: ItemBatchDeletePreviewResponse;
+    try {
+      preview = await apiPost<ItemBatchDeletePreviewResponse>(
+        '/api/items/batch-delete-ids/preview',
+        { ids },
+      );
+    } catch (e) {
+      message.error(`预览失败: ${(e as Error).message}`);
+      return;
+    }
+    if (preview.total === 0) {
+      message.info('勾选的记录已不存在');
+      clearChecked();
+      return;
+    }
     modal.confirm({
-      title: `批量删除 ${ids.length} 条抓取记录`,
-      content: '删除后不可恢复，价格趋势图中对应数据点也会消失。',
+      title: `批量删除 ${preview.total} 条抓取记录`,
+      content: (
+        <div>
+          <p>删除后不可恢复，价格趋势图中对应数据点也会消失：</p>
+          <ul style={{ maxHeight: 160, overflowY: 'auto', paddingLeft: 18, margin: 0 }}>
+            {preview.sample.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+            {preview.total > preview.sample.length && <li>… 等 {preview.total} 条</li>}
+          </ul>
+        </div>
+      ),
       okText: '确认删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
-        let fail = 0;
-        const hide = message.loading(`正在删除 0/${ids.length}...`, 0);
-        for (let i = 0; i < ids.length; i++) {
-          hide();
-          const loading = message.loading(`正在删除 ${i + 1}/${ids.length}...`, 0);
-          try {
-            await apiDelete(`/api/items/${encodeURIComponent(ids[i])}`);
-          } catch {
-            fail++;
-          }
-          loading();
-        }
-        clearChecked();
-        onChanged();
-        if (fail > 0) {
-          message.warning(`删除完成，${fail}/${ids.length} 个失败`);
-        } else {
-          message.success(`已删除 ${ids.length} 条`);
+        try {
+          const res = await apiPost<ItemBatchDeleteResponse>(
+            '/api/items/batch-delete-ids',
+            { ids },
+          );
+          message.success(`已删除 ${res.deleted} 条`);
+          clearChecked();
+          onChanged();
+        } catch (e) {
+          message.error(`删除失败: ${(e as Error).message}`);
         }
       },
     });

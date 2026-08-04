@@ -36,6 +36,14 @@ pub struct BatchDeletePreview {
     pub in_active_queues: u64,
 }
 
+/// 勾选批量删除的预览结果：实际存在的商品数 + 前 10 条名称样本 + 活跃队列占用数
+#[derive(Debug)]
+pub struct BatchDeleteByIdsPreview {
+    pub total: u64,
+    pub sample: Vec<String>,
+    pub in_active_queues: u64,
+}
+
 pub struct ProductService {
     products: Arc<dyn ProductRepository>,
     tags: Arc<dyn TagRepository>,
@@ -262,6 +270,37 @@ impl ProductService {
         }
         self.items.detach_product(&ids).await?;
         self.products.delete_by_ids(&ids).await
+    }
+
+    /// 预览「勾选批量删除」：实际存在的商品数 + 前 10 条名称样本 + 其中处于活跃队列的数量
+    pub async fn preview_batch_delete_by_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<BatchDeleteByIdsPreview, DomainError> {
+        if ids.is_empty() {
+            return Err(DomainError::InvalidInput("请先勾选要删除的商品".into()));
+        }
+        let products = self.products.list_by_ids(ids).await?;
+        let queued: std::collections::HashSet<i64> =
+            self.queues.queued_product_ids().await?.into_iter().collect();
+        let in_active_queues = products.iter().filter(|p| queued.contains(&p.id)).count() as u64;
+        Ok(BatchDeleteByIdsPreview {
+            total: products.len() as u64,
+            sample: products.iter().take(10).map(|p| p.name.as_str().to_string()).collect(),
+            in_active_queues,
+        })
+    }
+
+    /// 勾选批量删除：按 id 列表删除，返回实际删除条数。
+    /// 抓取历史（items）保留，仅解除归属；活跃队列中的条目由 worker 标记 skipped 兜底。
+    pub async fn batch_delete_by_ids(&self, ids: &[i64]) -> Result<u64, DomainError> {
+        if ids.is_empty() {
+            return Err(DomainError::InvalidInput("请先勾选要删除的商品".into()));
+        }
+        self.items.detach_product(ids).await?;
+        let deleted = self.products.delete_by_ids(ids).await?;
+        tracing::info!("勾选批量删除商品：{deleted} 个");
+        Ok(deleted)
     }
 
     /// 校验商品名未被占用；exclude_id 用于更新时排除自身

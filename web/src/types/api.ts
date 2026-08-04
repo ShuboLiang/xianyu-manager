@@ -64,12 +64,15 @@ export type { AiToolCallPurgeRequest } from './generated/AiToolCallPurgeRequest'
 export type { AiToolCallPurgeResponse } from './generated/AiToolCallPurgeResponse';
 export type { ClassifyProductsResponse } from './generated/ClassifyProductsResponse';
 export type { EnqueueResponse } from './generated/EnqueueResponse';
+export type { ItemBatchDeleteIdsRequest } from './generated/ItemBatchDeleteIdsRequest';
 export type { ItemBatchDeletePreviewResponse } from './generated/ItemBatchDeletePreviewResponse';
 export type { ItemBatchDeleteResponse } from './generated/ItemBatchDeleteResponse';
 export type { PreviewResponse } from './generated/PreviewResponse';
 export type { PriceTrendPoint } from './generated/PriceTrendPoint';
 export type { PriceTrendSeries } from './generated/PriceTrendSeries';
 export type { ProductBatchCreateResponse } from './generated/ProductBatchCreateResponse';
+export type { ProductBatchDeleteIdsPreviewResponse } from './generated/ProductBatchDeleteIdsPreviewResponse';
+export type { ProductBatchDeleteIdsRequest } from './generated/ProductBatchDeleteIdsRequest';
 export type { ProductBatchDeletePreviewResponse } from './generated/ProductBatchDeletePreviewResponse';
 export type { ProductBatchDeleteResponse } from './generated/ProductBatchDeleteResponse';
 export type { TestConnectionResponse } from './generated/TestConnectionResponse';

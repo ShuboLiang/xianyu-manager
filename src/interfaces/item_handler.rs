@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use axum::extract::{Json, Path, Query, State};
 
 use super::dto::{
-    ApiResponse, ItemBatchDeletePreviewResponse, ItemBatchDeleteRequest,
-    ItemBatchDeleteResponse, ItemListQuery, ItemResponse, PageResponse,
+    ApiResponse, ItemBatchDeleteIdsRequest, ItemBatchDeletePreviewResponse,
+    ItemBatchDeleteRequest, ItemBatchDeleteResponse, ItemListQuery, ItemResponse, PageResponse,
 };
 use super::AppState;
 
@@ -91,6 +91,31 @@ pub async fn batch_delete_items(
     Json(req): Json<ItemBatchDeleteRequest>,
 ) -> Json<ApiResponse<ItemBatchDeleteResponse>> {
     match state.item_service.delete_matching(req.search).await {
+        Ok(deleted) => Json(ApiResponse::ok(ItemBatchDeleteResponse { deleted })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/items/batch-delete-ids/preview：勾选批量删除预览（数量 + 前 10 条标题样本）
+pub async fn preview_batch_delete_items_by_ids(
+    State(state): State<AppState>,
+    Json(req): Json<ItemBatchDeleteIdsRequest>,
+) -> Json<ApiResponse<ItemBatchDeletePreviewResponse>> {
+    match state.item_service.preview_delete_by_ids(&req.ids).await {
+        Ok(p) => Json(ApiResponse::ok(ItemBatchDeletePreviewResponse {
+            total: p.total,
+            sample: p.sample,
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/items/batch-delete-ids：勾选批量删除执行（按 id 列表）
+pub async fn batch_delete_items_by_ids(
+    State(state): State<AppState>,
+    Json(req): Json<ItemBatchDeleteIdsRequest>,
+) -> Json<ApiResponse<ItemBatchDeleteResponse>> {
+    match state.item_service.delete_by_ids(&req.ids).await {
         Ok(deleted) => Json(ApiResponse::ok(ItemBatchDeleteResponse { deleted })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }

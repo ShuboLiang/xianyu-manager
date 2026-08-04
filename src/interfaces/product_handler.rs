@@ -8,10 +8,10 @@ use crate::domain::product::Product;
 
 use super::dto::{
     ApiResponse, PageResponse, PriceTrendPoint, PriceTrendQuery, PriceTrendSeries,
-    ProductBatchCreateRequest, ProductBatchCreateResponse, ProductBatchDeletePreviewResponse,
-    ProductBatchDeleteRequest, ProductBatchDeleteResponse, ProductBriefResponse,
-    ProductCreateRequest, ProductListQuery, ProductResponse, ProductUpdateRequest,
-    BatchSkippedItem,
+    ProductBatchCreateRequest, ProductBatchCreateResponse, ProductBatchDeleteIdsPreviewResponse,
+    ProductBatchDeleteIdsRequest, ProductBatchDeletePreviewResponse, ProductBatchDeleteRequest,
+    ProductBatchDeleteResponse, ProductBriefResponse, ProductCreateRequest, ProductListQuery,
+    ProductResponse, ProductUpdateRequest, BatchSkippedItem,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -167,6 +167,33 @@ pub async fn batch_delete_products(
     Json(req): Json<ProductBatchDeleteRequest>,
 ) -> Json<ApiResponse<ProductBatchDeleteResponse>> {
     match state.product_service.batch_delete_by_tag(req.tag_id).await {
+        Ok(deleted) => Json(ApiResponse::ok(ProductBatchDeleteResponse { deleted })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/products/batch-delete-ids/preview：勾选批量删除预览
+///（数量 + 前 10 条名称样本 + 活跃队列占用数，仅提示不阻止）
+pub async fn preview_batch_delete_products_by_ids(
+    State(state): State<AppState>,
+    Json(req): Json<ProductBatchDeleteIdsRequest>,
+) -> Json<ApiResponse<ProductBatchDeleteIdsPreviewResponse>> {
+    match state.product_service.preview_batch_delete_by_ids(&req.ids).await {
+        Ok(p) => Json(ApiResponse::ok(ProductBatchDeleteIdsPreviewResponse {
+            total: p.total,
+            sample: p.sample,
+            in_active_queues: p.in_active_queues,
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/products/batch-delete-ids：勾选批量删除执行（按 id 列表）
+pub async fn batch_delete_products_by_ids(
+    State(state): State<AppState>,
+    Json(req): Json<ProductBatchDeleteIdsRequest>,
+) -> Json<ApiResponse<ProductBatchDeleteResponse>> {
+    match state.product_service.batch_delete_by_ids(&req.ids).await {
         Ok(deleted) => Json(ApiResponse::ok(ProductBatchDeleteResponse { deleted })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }

@@ -10,6 +10,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
@@ -234,15 +235,17 @@ export function TagsPage() {
                   <Button type="link" size="small" danger style={{ padding: 0 }} onClick={() => remove(t)}>
                     删除
                   </Button>
-                  <Button
-                    type="link"
-                    size="small"
-                    danger
-                    style={{ padding: 0 }}
-                    onClick={() => removeProducts(t)}
-                  >
-                    删除商品
-                  </Button>
+                  <Tooltip title="删除该标签下的全部商品（标签本身保留，抓取历史保留）">
+                    <Button
+                      type="link"
+                      size="small"
+                      danger
+                      style={{ padding: 0 }}
+                      onClick={() => removeProducts(t)}
+                    >
+                      清空商品
+                    </Button>
+                  </Tooltip>
                 </Space>
               ),
             },

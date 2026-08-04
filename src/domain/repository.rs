@@ -62,6 +62,10 @@ pub trait ItemRepository: Send + Sync {
     async fn detach_product(&self, product_ids: &[i64]) -> Result<(), DomainError>;
     /// 删除单条抓取记录，返回是否真的删除了记录
     async fn delete(&self, id: &str) -> Result<bool, DomainError>;
+    /// 按 id 列表批量查询（勾选批删的预览样本用），按 id 升序
+    async fn list_by_ids(&self, ids: &[String]) -> Result<Vec<Item>, DomainError>;
+    /// 按 id 列表批量删除（勾选批删用），返回实际删除条数
+    async fn delete_by_ids(&self, ids: &[String]) -> Result<u64, DomainError>;
     /// 按搜索条件批量删除（语义同 list_paginated 的 search；None = 清空全部），返回删除条数
     async fn delete_matching(&self, search: Option<&str>) -> Result<u64, DomainError>;
 }
@@ -107,6 +111,8 @@ pub trait ProductRepository: Send + Sync {
     /// 使用某个标签的全部商品（用于删除标签前的影响提示）
     async fn list_by_tag(&self, tag_id: i64) -> Result<Vec<Product>, DomainError>;
     async fn update(&self, product: &Product) -> Result<(), DomainError>;
+    /// 按 id 列表批量查询（勾选批删的预览样本用），按创建时间升序
+    async fn list_by_ids(&self, ids: &[i64]) -> Result<Vec<Product>, DomainError>;
     /// 返回是否真的删除了记录
     async fn delete(&self, id: i64) -> Result<bool, DomainError>;
     /// 批量删除，返回实际删除条数

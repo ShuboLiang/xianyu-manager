@@ -62,6 +62,14 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
             post(item_handler::preview_batch_delete),
         )
         .route("/items/batch-delete", post(item_handler::batch_delete_items))
+        .route(
+            "/items/batch-delete-ids/preview",
+            post(item_handler::preview_batch_delete_items_by_ids),
+        )
+        .route(
+            "/items/batch-delete-ids",
+            post(item_handler::batch_delete_items_by_ids),
+        )
         .route("/items/{id}", delete(item_handler::delete_item))
         .route("/tags", get(tag_handler::list_tags).post(tag_handler::create_tag))
         .route(
@@ -81,6 +89,14 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route(
             "/products/batch-delete",
             post(product_handler::batch_delete_products),
+        )
+        .route(
+            "/products/batch-delete-ids/preview",
+            post(product_handler::preview_batch_delete_products_by_ids),
+        )
+        .route(
+            "/products/batch-delete-ids",
+            post(product_handler::batch_delete_products_by_ids),
         )
         .route(
             "/products",

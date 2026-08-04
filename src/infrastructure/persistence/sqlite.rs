@@ -518,6 +518,21 @@ impl ProductRepository for SqliteProductRepository {
         tx.commit().await.map_err(to_infra)
     }
 
+    /// 按 id 列表批量查询（勾选批删的预览样本用），按创建时间升序
+    async fn list_by_ids(&self, ids: &[i64]) -> Result<Vec<Product>, DomainError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("{PRODUCT_SELECT} WHERE p.id IN ({placeholders}) ORDER BY p.created_at ASC");
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id);
+        }
+        let rows = query.fetch_all(&self.pool).await.map_err(to_infra)?;
+        rows.iter().map(row_to_product).collect()
+    }
+
     async fn delete(&self, id: i64) -> Result<bool, DomainError> {
         let result = sqlx::query("DELETE FROM products WHERE id = ?")
             .bind(id)
@@ -1264,6 +1279,34 @@ impl ItemRepository for SqliteItemRepository {
             .await
             .map_err(to_infra)?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_by_ids(&self, ids: &[String]) -> Result<Vec<Item>, DomainError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("SELECT * FROM items WHERE id IN ({placeholders}) ORDER BY id ASC");
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id);
+        }
+        let rows = query.fetch_all(&self.pool).await.map_err(to_infra)?;
+        Ok(rows.iter().map(row_to_item).collect())
+    }
+
+    async fn delete_by_ids(&self, ids: &[String]) -> Result<u64, DomainError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("DELETE FROM items WHERE id IN ({placeholders})");
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id);
+        }
+        let result = query.execute(&self.pool).await.map_err(to_infra)?;
+        Ok(result.rows_affected())
     }
 
     async fn delete_matching(&self, search: Option<&str>) -> Result<u64, DomainError> {

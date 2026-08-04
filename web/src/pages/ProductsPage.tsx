@@ -30,6 +30,8 @@ import type {
   PageResponse,
   Product,
   ProductBatchCreateResponse,
+  ProductBatchDeleteIdsPreviewResponse,
+  ProductBatchDeleteResponse,
 } from '@/types/api';
 
 type SortKey = 'median_price' | 'avg_price' | 'crawled_count' | 'last_crawled_at' | 'recycle_price';
@@ -330,38 +332,61 @@ export function ProductsPage() {
     if (ok) clearChecked();
   };
 
-  const batchDelete = () => {
+  const batchDelete = async () => {
     const ids = getCheckedIds();
     if (ids.length === 0) {
       message.error('请先勾选商品');
       return;
     }
+    // 先预览：实际存在的商品数 + 名称样本 + 活跃队列占用（仅提示，不阻止）
+    let preview: ProductBatchDeleteIdsPreviewResponse;
+    try {
+      preview = await apiPost<ProductBatchDeleteIdsPreviewResponse>(
+        '/api/products/batch-delete-ids/preview',
+        { ids },
+      );
+    } catch (e) {
+      message.error(`预览失败: ${(e as Error).message}`);
+      return;
+    }
+    if (preview.total === 0) {
+      message.info('勾选的商品已不存在');
+      clearChecked();
+      return;
+    }
     modal.confirm({
-      title: `批量删除 ${ids.length} 个商品`,
-      content: '删除后标签关联与抓取统计将一并清除；若商品在活跃队列中，对应条目会被跳过。此操作不可恢复。',
+      title: `批量删除 ${preview.total} 个商品`,
+      content: (
+        <div>
+          <p>删除后标签关联与抓取统计将一并清除，已抓取的历史数据保留：</p>
+          <ul style={{ maxHeight: 160, overflowY: 'auto', paddingLeft: 18, margin: 0 }}>
+            {preview.sample.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+            {preview.total > preview.sample.length && <li>… 等 {preview.total} 个</li>}
+          </ul>
+          {preview.in_active_queues > 0 && (
+            <Typography.Text type="warning">
+              其中 {preview.in_active_queues} 个商品在活跃队列中，轮到时会自动跳过。
+            </Typography.Text>
+          )}
+        </div>
+      ),
       okText: '确认删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
-        let fail = 0;
-        // 串行删除，逐个汇报进度
-        const hide = message.loading(`正在删除 0/${ids.length}...`, 0);
-        for (let i = 0; i < ids.length; i++) {
-          hide();
-          const loading = message.loading(`正在删除 ${i + 1}/${ids.length}...`, 0);
-          try {
-            await apiDelete(`/api/products/${ids[i]}`);
-          } catch {
-            fail++;
-          }
-          loading();
-        }
-        clearChecked();
-        refresh();
-        if (fail > 0) {
-          message.warning(`删除完成，${fail}/${ids.length} 个失败`);
-        } else {
-          message.success(`已删除 ${ids.length} 个商品`);
+        try {
+          const res = await apiPost<ProductBatchDeleteResponse>(
+            '/api/products/batch-delete-ids',
+            { ids },
+          );
+          message.success(`已删除 ${res.deleted} 个商品`);
+          clearChecked();
+          refresh();
+          queryClient.invalidateQueries({ queryKey: ['stats'] });
+        } catch (e) {
+          message.error(`删除失败: ${(e as Error).message}`);
         }
       },
     });
