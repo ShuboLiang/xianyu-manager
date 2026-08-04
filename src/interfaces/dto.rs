@@ -390,6 +390,9 @@ pub struct AiProviderCreateRequest {
     pub timeout_secs: u32,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// 透传给 OpenAI 兼容端点的额外请求参数（JSON 对象字符串），
+    /// 如 DeepSeek 关思考 `{"thinking": {"type": "disabled"}}`
+    pub extra_params: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, TS)]
@@ -401,6 +404,8 @@ pub struct AiProviderUpdateRequest {
     pub model: Option<String>,
     pub timeout_secs: Option<u32>,
     pub max_retries: Option<u32>,
+    /// None=不修改，空串=清空，非空=替换（必须是合法 JSON 对象）
+    pub extra_params: Option<String>,
 }
 
 fn default_timeout_secs() -> u32 {
@@ -423,6 +428,8 @@ pub struct AiProviderResponse {
     pub model: String,
     pub timeout_secs: u32,
     pub max_retries: u32,
+    /// 额外请求参数（JSON 对象字符串），未设置为 null
+    pub extra_params: Option<String>,
     pub is_default: bool,
     #[ts(type = "number")]
     pub created_at: u64,
@@ -441,6 +448,7 @@ impl From<AiProvider> for AiProviderResponse {
             model: p.model.as_str().to_string(),
             timeout_secs: p.timeout_secs,
             max_retries: p.max_retries,
+            extra_params: p.extra_params.as_ref().map(|v| v.as_str().to_string()),
             is_default: p.is_default,
             created_at: p.created_at,
             updated_at: p.updated_at,
@@ -487,6 +495,20 @@ pub struct CrawlPromptResponse {
     pub custom_prompt: String,
 }
 
+/// AI 抓取模式响应：direct = 单轮调用（省 token），agent = ReAct 工具循环
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct CrawlModeResponse {
+    pub mode: String,
+}
+
+/// AI 抓取模式更新请求（service 层校验只允许 direct/agent）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct UpdateCrawlModeRequest {
+    pub mode: String,
+}
+
 impl From<AiStatus> for AiStatusResponse {
     fn from(s: AiStatus) -> Self {
         Self {
@@ -509,6 +531,15 @@ pub struct AiToolCallResponse {
     pub error: Option<String>,
     #[ts(type = "number")]
     pub duration_ms: u64,
+    /// LLM 调用的输入 token 数（纯工具行/供应商未上报为 null）
+    #[ts(type = "number | null")]
+    pub input_tokens: Option<u64>,
+    /// LLM 调用的输出 token 数
+    #[ts(type = "number | null")]
+    pub output_tokens: Option<u64>,
+    /// 命中供应商缓存的输入 token 数
+    #[ts(type = "number | null")]
+    pub cached_input_tokens: Option<u64>,
     #[ts(type = "number")]
     pub created_at: u64,
 }
@@ -522,6 +553,9 @@ impl From<AiToolCall> for AiToolCallResponse {
             result: c.result,
             error: c.error,
             duration_ms: c.duration_ms,
+            input_tokens: c.input_tokens,
+            output_tokens: c.output_tokens,
+            cached_input_tokens: c.cached_input_tokens,
             created_at: c.created_at,
         }
     }

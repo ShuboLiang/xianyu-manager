@@ -15,6 +15,8 @@ pub struct Config {
     pub webbridge_bin_path: Option<String>,
     /// 回收价系数：回收价 = 中位数 × 系数，默认 0.9
     pub recycle_factor: f64,
+    /// AI 抓取实现：`direct` 单轮调用（默认，省 token）；`agent` ReAct 工具循环（旧路径，保留）
+    pub ai_crawl_mode: String,
     /// SQLite 数据库文件路径
     pub database_path: String,
     /// AI 兜底配置（优先级：数据库默认配置 > 环境变量）
@@ -50,6 +52,8 @@ impl Config {
                 .and_then(|v| v.parse::<f64>().ok())
                 .filter(|f| *f > 0.0 && *f <= 1.0)
                 .unwrap_or(0.9),
+            ai_crawl_mode: std::env::var("AI_CRAWL_MODE")
+                .unwrap_or_else(|_| "direct".into()),
             database_path: std::env::var("DATABASE_PATH")
                 .unwrap_or_else(|_| "data/xianyu.db".into()),
             ai_fallback: AiEnvFallback {

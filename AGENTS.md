@@ -30,6 +30,7 @@ cd web && npm run dev   # http://127.0.0.1:5173，/api 自动代理到 127.0.0.1
 | `WEBBRIDGE_URL` | `http://127.0.0.1:10086`    | `GATEWAY=webbridge` 时的 Kimi WebBridge daemon 地址   |
 | `WEBBRIDGE_BIN_PATH` | 自动推导：Windows `%USERPROFILE%\.kimi-webbridge\bin\kimi-webbridge.exe`，其他 `~/.kimi-webbridge/bin/kimi-webbridge` | `GATEWAY=webbridge` 时若 daemon 未运行，自动执行该路径的 `... start` 拉起 |
 | `RECYCLE_FACTOR`| `0.9`                       | 回收价系数：回收价 = 中位数 × 系数（0,1]              |
+| `AI_CRAWL_MODE` | `direct`                    | AI 抓取实现兜底：`direct`=单轮调用（省 token）；`agent`=ReAct 工具循环。**DB 设置优先**（app_settings 键 `ai_crawl_mode`，`GET/PUT /api/ai/crawl-mode` 读写，前端「AI → 抓取提示词」tab 顶部切换，下一轮抓取生效无需重启） |
 | `XIANYU_COOKIE` | -                           | `GATEWAY=http` 时的闲鱼登录态 Cookie                  |
 | `DATABASE_PATH` | `data/xianyu.db`            | SQLite 数据库文件路径（目录自动创建）                 |
 | `AI_API_KEY`    | -                           | AI 环境变量兜底密钥（未配置 DB 默认 provider 时生效） |
@@ -50,7 +51,7 @@ src/
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
 │   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）、GET /api/products/price-trend（趋势图）、GET /api/products/export（xlsx 导出）、POST /api/products/batch（批量导入）、POST /api/products/batch-delete(/preview)（按标签批删）
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目、改名、历史清理 purge
-│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页 + 工具名/成败筛选、保留期清理 purge）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）
+│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页 + 工具名/成败筛选、保留期清理 purge）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、GET/PUT /api/ai/crawl-mode（抓取模式切换）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）
 │   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
@@ -64,7 +65,7 @@ src/
 │   ├── ai_tool_call_service.rs # AI 工具调用审计：分页筛选查询（工具名/成败）+ 保留期清理（PurgeCriteria 二选一校验）
 │   ├── trend_service.rs #   价格趋势计算（按商品聚合 items 成 PriceTrendSeries）
 │   ├── cancel_token.rs  #   共享取消令牌存储（watch 信号，异步分类任务取消用）
-│   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（AI 驱动抓取 + 两个工具）
+│   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（ReAct 抓取）/ crawl_direct_service（单轮调用抓取，默认）/ crawl_shared（ProductCrawler 端口 + 统计落库共享）/ crawl_switch（运行时按 app_settings 切换两种抓取实现）
 │   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
@@ -133,12 +134,16 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
   - **队列名称**：`CrawlQueue.name` 在入队时由圈选条件自动生成（选择器 → 「标签：A＋B ∧ 7 天未爬」，手动勾选 → 「手动勾选」，生成逻辑在 `queue_service.rs::target_summary`，件数不写进名称）；追加条目时新条件以「＋」并入名称（`CrawlQueue::append_condition`，超 `QUEUE_NAME_MAX_LEN`=40 字符截断），用户手动改名（`PUT /api/queues/{id}/name` → `CrawlQueue::rename`，置 `name_custom=true`）后不再自动拼条件；老库经启动迁移补 `name`/`name_custom` 列（name 默认为空串，前端回退显示「队列 #id」）。前端所有出现队列的地方（面板列、运行卡片、追加目标、Header 指示）一律显示名称。
   - 历史清理：`DELETE /api/queues/{id}` 只允许删除 done/cancelled 的队列（条目一并删除），活跃队列拒绝并提示先取消。前端默认只展示活跃队列，done/cancelled 收进「历史队列」折叠区，可在展开后单个删除；也可按条件批量清理——`POST /api/queues/purge(/preview)`，条件二选一（`QueuePurgeCriteria::new` 校验恰填一个）：`before_days`（清 N 天前结束的，0=清空全部历史）或 `keep_latest`（仅保留最近结束的 N 条）；只作用于 done/cancelled，preview 返回将删的队列数与条目总数，前端「清理历史」弹窗走 preview/confirm 模式。
   - 每条抓取成功后调用 `Product::record_crawl_result` 回填统计（中位数/均价/常见价位/数量/最后爬取时间/回收价格）。`GATEWAY=mock` 下回收价用均价占位；`GATEWAY=webbridge` 走下方 AI 驱动抓取，回收价 = 中位数 × `RECYCLE_FACTOR`（默认 0.9）。
-- **AI 驱动抓取**（`GATEWAY=webbridge`，实现在 `application/ai/crawl_agent_service.rs`）：队列条目由 ReAct agent 处理——AI 调 `xianyu_search`（经 `WebBridgeClient` 驱动本机真实浏览器带登录态搜闲鱼，导航到搜索页 → 等 SPA 渲染 → evaluate JS 提取候选，最多 30 条）→ AI 从候选中挑最多 8 个「描述最匹配、质量最高」的有效商品（剔除配件/求购/不相关/异常价）→ 调 `save_crawl_result` 提交，工具内算中位数/均价/回收价并写库（items + product 统计）。`save_crawl_result` 未被调用则条目记 failed；两次工具调用都落 `ai_tool_calls` 审计表。WebBridge 未启动/未登录/被风控时错误信息会指向浏览器标签组「闲鱼数据抓取」。
-  - **用户自定义抓取提示词**（`AiSettingsService`，存 `app_settings` 表键 `crawl_custom_prompt`，`GET/PUT /api/ai/crawl-prompt` 读写，前端「AI → 抓取提示词」tab 编辑）：每次抓取读取最新值注入 agent system prompt（保存后下一轮即生效），可表达筛选与定价规则（如「CPU 类回收价打九折，显示器类打八折」）；`save_crawl_result` 支持可选 `recycle_factor` 参数（(0,1]，越界报错让 AI 重试），AI 按规则为商品选择系数，省略则用 `RECYCLE_FACTOR` 默认值。
+- **AI 驱动抓取**（`GATEWAY=webbridge`）：队列条目由 `ProductCrawler`（端口在 `application/ai/crawl_shared.rs`，`QueueService` 只依赖该 trait）处理。两种实现同时构造，由 `SwitchableCrawler`（`crawl_switch.rs`）**每次抓取实时读取** `app_settings` 的 `ai_crawl_mode` 决定走哪条（DB 设置 > `AI_CRAWL_MODE` 环境变量兜底，前端「AI → 抓取提示词」tab 切换后下一轮生效）；统计计算与落库（中位数/均价/常见价位/回收价 = 中位数 × `RECYCLE_FACTOR`，默认 0.9）共享 `crawl_shared::finalize_crawl`：
+  - **`direct` 单轮调用（默认，`crawl_direct_service.rs`，省 token）**：Rust 直接用商品名搜索 → 候选 < 5 条才补一次袖珍调用换词重搜 → 一次 completion 让 AI 返回选中序号 JSON（候选以「序号. 标题 ¥价格 · 卖家」进 prompt，**URL 不进 prompt**，AI 回序号、Rust 按序号取回完整字段，候选上限 20）→ Rust 校验序号、算统计、落库。解析失败重试一次；非法 recycle_factor 兜底默认系数。LLM 调用 1 次（兜底 2 次），相比 agent 路径省约 70% token。无真实工具调用，但各步骤**手写审计记录**落 `ai_tool_calls`（`xianyu_search` / `refine_search_keyword` / `crawl_select` / `save_crawl_result`，尽力而为不阻塞抓取），回查形态与 agent 路径一致。
+  - **`agent` ReAct 循环（旧路径，保留，`crawl_agent_service.rs`）**：AI 调 `xianyu_search`（经 `WebBridgeClient` 驱动本机真实浏览器带登录态搜闲鱼，导航到搜索页 → 等 SPA 渲染 → evaluate JS 提取候选，最多 30 条）→ AI 从候选中挑最多 8 个有效商品（剔除配件/求购/不相关/异常价）→ 调 `save_crawl_result` 提交。`save_crawl_result` 未被调用则条目记 failed；两次工具调用都落 `ai_tool_calls` 审计表。
+  - 公共部分：WebBridge 未启动/未登录/被风控时错误信息会指向浏览器标签组「闲鱼数据抓取」；**用户自定义抓取提示词**（`AiSettingsService`，存 `app_settings` 表键 `crawl_custom_prompt`，`GET/PUT /api/ai/crawl-prompt` 读写，前端「AI → 抓取提示词」tab 编辑）每次抓取读取最新值注入提示词（保存后下一轮即生效），可表达筛选与定价规则（如「CPU 类回收价打九折」）；AI 按规则给出系数（agent 走 `save_crawl_result` 的 `recycle_factor` 参数（(0,1]，越界报错让 AI 重试），direct 走 JSON 的 `recycle_factor` 字段），省略则用 `RECYCLE_FACTOR` 默认值。
 - **AI 基础设施**（详细方案见 `docs/design-ai-module.md`）：
   - `AiGateway`/`AiTool` 端口在 `application/ports.rs`；真实实现 `RigAiGateway` 在 `infrastructure/ai_gateway.rs`，基于 `rig-core` 0.41 的 OpenAI 兼容端点（DeepSeek/千问/Kimi 等通用），手写 ReAct 工具循环。
   - AI 供应商配置入库管理（`ai_providers`）：前端「AI 接口管理」卡片可增删改查、设默认、测试连通性；密钥明文存本地 SQLite，响应掩码显示。优先级：**DB 默认配置 > `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 环境变量兜底**。
+  - **额外请求参数（extra_params）**：provider 上的可选 JSON 对象（`ExtraParams` 值对象校验必须是合法 JSON 对象，更新语义同 api_key——None=不修改/空串=清空/值=替换；老库启动时 ALTER 补列），请求时经 rig `additional_params_opt` 原样合并进请求体（`complete` 与 `run_agent` 都生效）。端点私有参数不写死代码：DeepSeek 关思考 `{"thinking": {"type": "disabled"}}`（V4 默认开启 thinking 且 effort=high，思考链按输出计费，简单任务建议关掉）、调推理强度 `{"reasoning_effort": "low"}`、千问 `{"enable_thinking": false}` 等都由用户按供应商文档自配。
   - AI 工具可直接产生读写结果（完全自动，无人工确认）；每次工具执行落 `ai_tool_calls` 审计表（工具名/参数/结果或错误/耗时），前端「AI 工具调用记录」可回查（按工具名/成败筛选）。审计记录只增不改，**不做单条删除**；膨胀控制走保留期清理：`POST /api/ai/tool-calls/purge(/preview)`，条件二选一——`before_days`（删 N 天前，0=清空）或 `keep_latest`（仅保留最新 N 条），交互沿用 preview/confirm 批删模式。
+  - **Token 用量审计**：`ai_tool_calls` 另有 `input_tokens`/`output_tokens`/`cached_input_tokens` 三列（可空，纯工具行与供应商未上报时为 NULL；老库启动时 ALTER 迁移补齐）。`AiGateway::complete` 返回 `AiCompletion { text, usage }`（`TokenUsage` 定义在 `application/ports.rs`，供应商 usage 全 0 视为未上报→None）；direct 路径的 `crawl_select`/`refine_search_keyword` 行带用量，agent 路径每轮 LLM 调用落一行 `llm_call` 审计（参数只记轮次，结果记回复长度与本轮工具名）。前端调用记录表格「Token 入/出」列展示，缓存命中附注。
   - **AI 自动打标签用例**（`application/ai/classify_service.rs`，详细方案见 `docs/design-batch-import-ai-classify.md`）：传入商品 id 列表，AI 调 `list_tags` 等工具为商品匹配标签并写回。两条路径：`POST /api/ai/classify-products` 同步（单次上限 50 个）与 `POST /api/ai/classify-tasks` 异步任务（每批 50 个，内存仓储，可查进度、可取消——取消信号走 `cancel_token.rs` 的 watch 令牌）。后续新用例来了只需在 `application/ai/` 加 service 并注册工具。
 
 ## 扩展约定

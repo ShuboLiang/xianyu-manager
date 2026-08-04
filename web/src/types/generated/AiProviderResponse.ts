@@ -4,4 +4,8 @@ export type AiProviderResponse = { id: number, name: string, base_url: string,
 /**
  * 掩码后的密钥，未设置时为 null
  */
-api_key: string | null, model: string, timeout_secs: number, max_retries: number, is_default: boolean, created_at: number, updated_at: number, };
+api_key: string | null, model: string, timeout_secs: number, max_retries: number, 
+/**
+ * 额外请求参数（JSON 对象字符串），未设置为 null
+ */
+extra_params: string | null, is_default: boolean, created_at: number, updated_at: number, };

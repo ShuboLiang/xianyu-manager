@@ -9,7 +9,8 @@ use crate::domain::error::DomainError;
 use crate::domain::repository::AiProviderRepository;
 
 /// 更新配置的补丁：None 表示不修改该字段；
-/// api_key 特殊：None=保持不变，Some("")=清空，Some(v)=替换
+/// api_key 特殊：None=保持不变，Some("")=清空，Some(v)=替换；
+/// extra_params 与 api_key 语义相同（Some(v) 必须是合法 JSON 对象）
 #[derive(Debug, Default)]
 pub struct AiProviderPatch {
     pub name: Option<String>,
@@ -18,6 +19,7 @@ pub struct AiProviderPatch {
     pub model: Option<String>,
     pub timeout_secs: Option<u32>,
     pub max_retries: Option<u32>,
+    pub extra_params: Option<String>,
 }
 
 /// 连通性测试结果
@@ -65,6 +67,7 @@ impl AiProviderService {
         model: String,
         timeout_secs: u32,
         max_retries: u32,
+        extra_params: Option<String>,
     ) -> Result<AiProvider, DomainError> {
         let new_provider = NewAiProvider::new(
             name,
@@ -73,6 +76,7 @@ impl AiProviderService {
             model,
             timeout_secs,
             max_retries,
+            extra_params,
         )?;
         self.ensure_name_available(new_provider.name.as_str(), None)
             .await?;
@@ -119,6 +123,7 @@ impl AiProviderService {
             model,
             patch.timeout_secs.unwrap_or(provider.timeout_secs),
             patch.max_retries.unwrap_or(provider.max_retries),
+            patch.extra_params,
         )?;
         self.providers.update(&provider).await?;
         Ok(provider)

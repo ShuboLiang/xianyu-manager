@@ -7,16 +7,27 @@ use crate::domain::repository::SettingsRepository;
 
 /// 用户自定义抓取提示词在 app_settings 表中的键
 pub const CRAWL_PROMPT_KEY: &str = "crawl_custom_prompt";
+/// AI 抓取模式在 app_settings 表中的键
+pub const CRAWL_MODE_KEY: &str = "ai_crawl_mode";
+/// 抓取模式：单轮调用（默认，省 token）
+pub const CRAWL_MODE_DIRECT: &str = "direct";
+/// 抓取模式：ReAct 工具循环（旧路径）
+pub const CRAWL_MODE_AGENT: &str = "agent";
 /// 提示词长度上限（字符数）
 const MAX_PROMPT_LEN: usize = 2000;
 
 pub struct AiSettingsService {
     settings: Arc<dyn SettingsRepository>,
+    /// 未在 DB 设置抓取模式时的环境变量兜底（AI_CRAWL_MODE）
+    env_crawl_mode: String,
 }
 
 impl AiSettingsService {
-    pub fn new(settings: Arc<dyn SettingsRepository>) -> Self {
-        Self { settings }
+    pub fn new(settings: Arc<dyn SettingsRepository>, env_crawl_mode: String) -> Self {
+        Self {
+            settings,
+            env_crawl_mode,
+        }
     }
 
     /// 读取自定义抓取提示词，未设置时返回空串
@@ -38,5 +49,27 @@ impl AiSettingsService {
         }
         self.settings.set(CRAWL_PROMPT_KEY, &prompt).await?;
         Ok(prompt)
+    }
+
+    /// 读取当前生效的抓取模式（DB 设置 > 环境变量兜底）
+    pub async fn get_crawl_mode(&self) -> Result<String, DomainError> {
+        Ok(self
+            .settings
+            .get(CRAWL_MODE_KEY)
+            .await?
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| self.env_crawl_mode.clone()))
+    }
+
+    /// 保存抓取模式（仅允许 direct/agent；保存后下一轮抓取生效，无需重启）
+    pub async fn save_crawl_mode(&self, mode: String) -> Result<String, DomainError> {
+        let mode = mode.trim().to_string();
+        if mode != CRAWL_MODE_DIRECT && mode != CRAWL_MODE_AGENT {
+            return Err(DomainError::InvalidInput(format!(
+                "非法抓取模式「{mode}」，只允许 {CRAWL_MODE_DIRECT} / {CRAWL_MODE_AGENT}"
+            )));
+        }
+        self.settings.set(CRAWL_MODE_KEY, &mode).await?;
+        Ok(mode)
     }
 }

@@ -11,11 +11,13 @@ import {
   Modal,
   Radio,
   Row,
+  Segmented,
   Select,
   Space,
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -28,6 +30,7 @@ import type {
   AiToolCallPurgePreviewResponse,
   AiToolCallPurgeRequest,
   AiToolCallPurgeResponse,
+  CrawlModeResponse,
   CrawlPrompt,
   PageResponse,
   TestConnectionResponse,
@@ -66,12 +69,16 @@ interface ProviderFormValues {
   api_key?: string;
   model: string;
   timeout_secs: number;
+  extra_params?: string;
 }
 
-// 工具名标签配色：抓取工具蓝、写库工具绿，其余默认
+// 工具名标签配色：抓取工具蓝、写库工具绿、LLM 调用紫，其余默认
 const TOOL_TAG_COLOR: Record<string, string> = {
   xianyu_search: 'blue',
   save_crawl_result: 'green',
+  llm_call: 'purple',
+  crawl_select: 'purple',
+  refine_search_keyword: 'purple',
 };
 
 /** JSON 美化：能解析则缩进展示，否则原样输出 */
@@ -90,16 +97,32 @@ export function AiPage() {
   const { data: ai } = useQuery({
     queryKey: ['ai'],
     queryFn: async () => {
-      const [providers, status, prompt] = await Promise.all([
+      const [providers, status, prompt, crawlMode] = await Promise.all([
         apiGet<AiProvider[]>('/api/ai/providers'),
         apiGet<AiStatus>('/api/ai/status'),
         apiGet<CrawlPrompt>('/api/ai/crawl-prompt'),
+        apiGet<CrawlModeResponse>('/api/ai/crawl-mode'),
       ]);
-      return { providers, status, prompt: prompt.custom_prompt };
+      return { providers, status, prompt: prompt.custom_prompt, crawlMode: crawlMode.mode };
     },
   });
   const providers = ai?.providers ?? [];
   const status = ai?.status ?? null;
+
+  // ---------- 抓取模式切换（direct 单轮调用 / agent ReAct，下一轮抓取生效） ----------
+  const [modeSaving, setModeSaving] = useState(false);
+  const switchCrawlMode = async (v: string | number) => {
+    setModeSaving(true);
+    try {
+      await apiPut('/api/ai/crawl-mode', { mode: String(v) });
+      message.success('抓取模式已切换，下一轮抓取生效');
+      refresh();
+    } catch (e) {
+      message.error(`切换失败: ${(e as Error).message}`);
+    } finally {
+      setModeSaving(false);
+    }
+  };
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['ai'] });
 
@@ -125,6 +148,7 @@ export function AiPage() {
       api_key: values.api_key?.trim() || null,
       model: values.model.trim(),
       timeout_secs: values.timeout_secs || 60,
+      extra_params: values.extra_params?.trim() || null,
     };
     const isEdit = editingId !== null;
     try {
@@ -152,6 +176,7 @@ export function AiPage() {
         api_key: undefined, // 密钥不回填，留空表示不修改
         model: p.model,
         timeout_secs: p.timeout_secs,
+        extra_params: p.extra_params ?? undefined,
       });
     } catch (e) {
       message.error(`加载配置失败: ${(e as Error).message}`);
@@ -409,9 +434,37 @@ export function AiPage() {
                           </Form.Item>
                         </Col>
                       </Row>
+                      <Form.Item
+                        name="extra_params"
+                        label="额外请求参数（可选）"
+                        style={{ marginBottom: 0 }}
+                        rules={[
+                          {
+                            validator: (_, v?: string) => {
+                              if (!v || !v.trim()) return Promise.resolve();
+                              try {
+                                const parsed = JSON.parse(v);
+                                if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                                  return Promise.reject(new Error('必须是 JSON 对象'));
+                                }
+                                return Promise.resolve();
+                              } catch {
+                                return Promise.reject(new Error('不是合法 JSON'));
+                              }
+                            },
+                          },
+                        ]}
+                      >
+                        <Input.TextArea
+                          autoSize={{ minRows: 1, maxRows: 4 }}
+                          placeholder='如 DeepSeek 关思考：{"thinking": {"type": "disabled"}}'
+                          style={{ fontFamily: 'monospace', fontSize: 12 }}
+                        />
+                      </Form.Item>
                     </Form>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。
+                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。额外请求参数会原样合并进每次 API
+                      请求体（可关思考/调推理强度，见供应商文档）；编辑时留空表示不修改，填 {'{}'} 表示清除。
                     </Typography.Text>
                   </Card>
                   <Table<AiProvider>
@@ -425,6 +478,20 @@ export function AiPage() {
                       { title: 'Base URL', dataIndex: 'base_url', ellipsis: true },
                       { title: '模型', dataIndex: 'model' },
                       { title: '密钥', dataIndex: 'api_key', render: (v: string | null) => v || '-' },
+                      {
+                        title: '额外参数',
+                        dataIndex: 'extra_params',
+                        ellipsis: true,
+                        width: 180,
+                        render: (v: string | null) =>
+                          v ? (
+                            <Tooltip title={v}>
+                              <span className="num" style={{ fontSize: 12, opacity: 0.75 }}>{v}</span>
+                            </Tooltip>
+                          ) : (
+                            '-'
+                          ),
+                      },
                       {
                         title: '默认',
                         dataIndex: 'is_default',
@@ -464,6 +531,23 @@ export function AiPage() {
               label: '抓取提示词',
               children: (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Space size={12} align="center" wrap>
+                    <Typography.Text strong>抓取模式</Typography.Text>
+                    <Segmented
+                      value={ai?.crawlMode ?? 'direct'}
+                      disabled={modeSaving}
+                      onChange={switchCrawlMode}
+                      options={[
+                        { label: '单轮调用（省 token）', value: 'direct' },
+                        { label: 'ReAct 工具循环', value: 'agent' },
+                      ]}
+                    />
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {ai?.crawlMode === 'agent'
+                        ? 'AI 自主多轮调用搜索/提交工具，灵活但 token 消耗高'
+                        : 'Rust 搜索 + AI 一次筛选，token 约为前者的 1/3'}
+                    </Typography.Text>
+                  </Space>
                   <Alert
                     type="info"
                     showIcon
@@ -626,6 +710,31 @@ export function AiPage() {
                       render: (v: number) => (
                         <span className="num">{v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${v} ms`}</span>
                       ),
+                    },
+                    {
+                      title: 'Token 入/出',
+                      key: 'tokens',
+                      width: 150,
+                      align: 'right',
+                      render: (_, c) =>
+                        c.input_tokens == null ? (
+                          '-'
+                        ) : (
+                          <Tooltip
+                            title={
+                              (c.cached_input_tokens ?? 0) > 0
+                                ? `输入 ${c.input_tokens}（其中命中缓存 ${c.cached_input_tokens}）/ 输出 ${c.output_tokens ?? 0}`
+                                : `输入 ${c.input_tokens} / 输出 ${c.output_tokens ?? 0}`
+                            }
+                          >
+                            <span className="num" style={{ fontSize: 12 }}>
+                              {c.input_tokens} / {c.output_tokens ?? 0}
+                              {(c.cached_input_tokens ?? 0) > 0 && (
+                                <span style={{ opacity: 0.6 }}>（缓存 {c.cached_input_tokens}）</span>
+                              )}
+                            </span>
+                          </Tooltip>
+                        ),
                     },
                   ]}
                   onChange={(pagination) =>

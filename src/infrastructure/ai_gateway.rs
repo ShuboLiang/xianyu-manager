@@ -15,7 +15,7 @@ use rig_core::message::{Message, ToolResult, ToolResultContent, UserContent};
 use rig_core::OneOrMany;
 use rig_core::providers::openai;
 
-use crate::application::ports::{AiEnvFallback, AiGateway, AiTool};
+use crate::application::ports::{AiCompletion, AiEnvFallback, AiGateway, AiTool, TokenUsage};
 use crate::domain::ai_provider::{AiProvider, BaseUrl, ModelName, ProviderName};
 use crate::domain::ai_tool_call::NewAiToolCall;
 use crate::domain::error::DomainError;
@@ -74,6 +74,7 @@ impl RigAiGateway {
                 model: ModelName::new(self.env.model.clone()).map_err(env_err)?,
                 timeout_secs: 60,
                 max_retries: 2,
+                extra_params: None,
                 is_default: false,
                 created_at: now,
                 updated_at: now,
@@ -111,6 +112,54 @@ impl RigAiGateway {
             })
             .collect()
     }
+
+    /// 单次补全的内部实现：complete / complete_with 共用，返回文本与 token 用量
+    async fn complete_inner(
+        provider: &AiProvider,
+        system: &str,
+        user: &str,
+    ) -> Result<AiCompletion, DomainError> {
+        tracing::debug!("AI complete 请求: model={}, user_len={}", provider.model, user.len());
+        let client = Self::build_client(provider)?;
+        let model = client.completion_model(provider.model.as_str());
+        let response = model
+            .completion_request(Message::user(user))
+            .preamble(system.to_string())
+            .additional_params_opt(provider.extra_params.as_ref().map(|p| p.as_json()))
+            .send()
+            .await
+            .map_err(|e| DomainError::Infrastructure(format!("AI 请求失败: {e}")))?;
+
+        let texts: Vec<String> = response
+            .choice
+            .iter()
+            .filter_map(|c| match c {
+                AssistantContent::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect();
+        let reply = texts.join("");
+        let usage = to_token_usage(&response.usage);
+        tracing::debug!(
+            "AI complete 响应长度: {}, usage: {:?}",
+            reply.len(),
+            usage
+        );
+        tracing::trace!("AI complete 响应内容: {}", reply);
+        Ok(AiCompletion { text: reply, usage })
+    }
+}
+
+/// 从 rig 的 Usage 提取端口层的 TokenUsage；供应商未上报（全 0）时返回 None
+fn to_token_usage(u: &rig_core::completion::Usage) -> Option<TokenUsage> {
+    if u.input_tokens == 0 && u.output_tokens == 0 {
+        return None;
+    }
+    Some(TokenUsage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cached_input_tokens: u.cached_input_tokens,
+    })
 }
 
 /// 执行单个工具并落审计日志；错误也会返回，让调用方决定是否回填给模型
@@ -138,6 +187,10 @@ async fn execute_tool(
             result: result_json,
             error: error_text,
             duration_ms,
+            // 纯工具行没有 LLM 用量（用量记在 llm_call 行上）
+            input_tokens: None,
+            output_tokens: None,
+            cached_input_tokens: None,
         })
         .await
     {
@@ -147,15 +200,55 @@ async fn execute_tool(
     result
 }
 
+/// 落一条 LLM 调用审计（agent 模式每轮一条，带 token 用量；尽力而为，失败只记日志）
+async fn audit_llm_call(
+    calls: &Arc<dyn AiToolCallRepository>,
+    round: u32,
+    reply_len: usize,
+    tool_names: &[String],
+    usage: Option<TokenUsage>,
+    duration_ms: u64,
+) {
+    let (input_tokens, output_tokens, cached_input_tokens) = match usage {
+        Some(u) => (
+            Some(u.input_tokens),
+            Some(u.output_tokens),
+            Some(u.cached_input_tokens),
+        ),
+        None => (None, None, None),
+    };
+    if let Err(e) = calls
+        .create(&NewAiToolCall {
+            tool_name: "llm_call".to_string(),
+            arguments: serde_json::json!({ "round": round }).to_string(),
+            result: Some(
+                serde_json::json!({
+                    "reply_len": reply_len,
+                    "tool_calls": tool_names,
+                })
+                .to_string(),
+            ),
+            error: None,
+            duration_ms,
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+        })
+        .await
+    {
+        tracing::warn!("LLM 调用审计落库失败: {e}");
+    }
+}
+
 #[async_trait]
 impl AiGateway for RigAiGateway {
     async fn is_available(&self) -> bool {
         self.resolve_provider().await.is_ok()
     }
 
-    async fn complete(&self, system: &str, user: &str) -> Result<String, DomainError> {
+    async fn complete(&self, system: &str, user: &str) -> Result<AiCompletion, DomainError> {
         let provider = self.resolve_provider().await?;
-        self.complete_with(&provider, system, user).await
+        Self::complete_inner(&provider, system, user).await
     }
 
     async fn complete_with(
@@ -164,28 +257,8 @@ impl AiGateway for RigAiGateway {
         system: &str,
         user: &str,
     ) -> Result<String, DomainError> {
-        tracing::debug!("AI complete 请求: model={}, user_len={}", provider.model, user.len());
-        let client = Self::build_client(provider)?;
-        let model = client.completion_model(provider.model.as_str());
-        let response = model
-            .completion_request(Message::user(user))
-            .preamble(system.to_string())
-            .send()
-            .await
-            .map_err(|e| DomainError::Infrastructure(format!("AI 请求失败: {e}")))?;
-
-        let texts: Vec<String> = response
-            .choice
-            .iter()
-            .filter_map(|c| match c {
-                AssistantContent::Text(t) => Some(t.text.clone()),
-                _ => None,
-            })
-            .collect();
-        let reply = texts.join("");
-        tracing::debug!("AI complete 响应长度: {}", reply.len());
-        tracing::trace!("AI complete 响应内容: {}", reply);
-        Ok(reply)
+        // 连通性测试只关心文本，丢弃用量
+        Ok(Self::complete_inner(provider, system, user).await?.text)
     }
 
     async fn run_agent(
@@ -218,14 +291,18 @@ impl AiGateway for RigAiGateway {
                 Message::user("继续。如果你还没有通过工具提交全部结果，请先调用相应工具提交，全部提交完再输出简短总结。")
             };
 
+            let round_start = std::time::Instant::now();
             let response = model
                 .completion_request(prompt)
                 .preamble(system.to_string())
                 .messages(history.clone())
                 .tools(tool_defs.clone())
+                .additional_params_opt(provider.extra_params.as_ref().map(|p| p.as_json()))
                 .send()
                 .await
                 .map_err(|e| DomainError::Infrastructure(format!("AI agent 请求失败: {e}")))?;
+            let round_duration_ms = round_start.elapsed().as_millis() as u64;
+            let round_usage = to_token_usage(&response.usage);
 
             // 首轮 user 消息（商品清单等关键输入）必须进入历史，
             // 否则第二轮起模型只能看到工具往返，看不到原始请求
@@ -253,6 +330,22 @@ impl AiGateway for RigAiGateway {
                     _ => {}
                 }
             }
+
+            // 每轮 LLM 调用落一条审计（带 token 用量），agent 模式的花费可逐轮回查
+            let reply_len: usize = texts.iter().map(|t| t.len()).sum();
+            let tool_names: Vec<String> = tool_calls
+                .iter()
+                .map(|tc| tc.function.name.clone())
+                .collect();
+            audit_llm_call(
+                &self.calls,
+                round + 1,
+                reply_len,
+                &tool_names,
+                round_usage,
+                round_duration_ms,
+            )
+            .await;
 
             // 先把 assistant 这一整轮（含文本+工具调用）写进历史
             let mut assistant_content: Vec<AssistantContent> = Vec::new();
@@ -326,8 +419,11 @@ impl AiGateway for MockAiGateway {
         true
     }
 
-    async fn complete(&self, _system: &str, _user: &str) -> Result<String, DomainError> {
-        Ok("mock-complete".into())
+    async fn complete(&self, _system: &str, _user: &str) -> Result<AiCompletion, DomainError> {
+        Ok(AiCompletion {
+            text: "mock-complete".into(),
+            usage: None,
+        })
     }
 
     async fn complete_with(

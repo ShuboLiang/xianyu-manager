@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
+use crate::application::ai::crawl_shared::{finalize_crawl, CrawlOutcome, ProductCrawler, MAX_SELECTED};
 use crate::application::ai_settings_service::CRAWL_PROMPT_KEY;
 use crate::application::ports::{AiGateway, AiTool, XianYuGateway};
 use crate::domain::crawl_task::now_unix;
@@ -18,21 +19,8 @@ use crate::domain::item::Item;
 use crate::domain::product::Product;
 use crate::domain::repository::{ItemRepository, ProductRepository, SettingsRepository, TagRepository};
 
-/// AI 单次最多提交的有效商品数
-pub const MAX_SELECTED: usize = 8;
 /// agent 最大轮数：搜索（含换关键词重试）+ 提交 + 总结，留足容错
 const MAX_ROUNDS: u32 = 10;
-
-/// 一次抓取落库的统计结果（由 save_crawl_result 工具写入，供 worker 读取）
-#[derive(Debug, Clone, Copy)]
-pub struct CrawlOutcome {
-    pub median_price: f64,
-    pub avg_price: f64,
-    /// 常见价位（百元档分档众数）
-    pub mode_price: Option<f64>,
-    pub count: u32,
-    pub recycle_price: f64,
-}
 
 pub struct CrawlAgentService {
     gateway: Arc<dyn XianYuGateway>,
@@ -66,10 +54,6 @@ impl CrawlAgentService {
     }
 
     /// 抓取一个商品：跑一轮 AI agent，返回落库的统计结果
-    pub async fn check_ai_available(&self) -> bool {
-        self.ai.is_available().await
-    }
-
     pub async fn crawl_product(&self, product: &Product) -> Result<CrawlOutcome, DomainError> {
         tracing::debug!("开始为商品 {} 跑 AI 抓取 agent", product.id);
         // 工具执行与 agent 循环在同一线程串行，std Mutex 即可（不在 await 间持锁）
@@ -352,20 +336,8 @@ impl AiTool for SaveCrawlResultTool {
             });
         }
 
-        // 统计：中位数 / 均价 / 回收价（中位数 × 系数，默认 0.9）
-        let mut prices: Vec<f64> = items.iter().map(|i| i.price).collect();
-        prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let count = prices.len();
-        let median = if count % 2 == 1 {
-            prices[count / 2]
-        } else {
-            (prices[count / 2 - 1] + prices[count / 2]) / 2.0
-        };
-        let avg = prices.iter().sum::<f64>() / count as f64;
-        // 常见价位：百元档分档众数（原始众数对连续价格没有意义）
-        let mode = crate::domain::product::mode_price(&prices);
         // 回收价 = 中位数 × 系数：AI 可按用户自定义定价规则传 recycle_factor，
-        // 省略时用默认系数（RECYCLE_FACTOR，默认 0.9）
+        // 省略时用默认系数（RECYCLE_FACTOR，默认 0.9）；越界报错让 AI 重试
         let factor = match args.get("recycle_factor") {
             None | Some(JsonValue::Null) => self.recycle_factor,
             Some(v) => {
@@ -378,38 +350,40 @@ impl AiTool for SaveCrawlResultTool {
                 f
             }
         };
-        let recycle = (median * factor).floor();
 
-        let mut product = self
-            .products
-            .find(self.product_id)
-            .await?
-            .ok_or_else(|| DomainError::NotFound(format!("商品 {}", self.product_id)))?;
-        product.record_crawl_result(median, avg, mode, count as u32, recycle);
-        self.products.update(&product).await?;
-        let _ = self.items.save_all(&items).await;
-
-        let result = CrawlOutcome {
-            median_price: median,
-            avg_price: avg,
-            mode_price: mode,
-            count: count as u32,
-            recycle_price: recycle,
-        };
+        let result = finalize_crawl(
+            &self.products,
+            &self.items,
+            self.product_id,
+            &items,
+            factor,
+        )
+        .await?;
         *self.outcome.lock().expect("outcome 锁中毒") = Some(result);
 
         tracing::info!(
-            "商品 {} 抓取完成：{count} 条有效，中位数 {median:.2}，回收价 {recycle:.2}",
-            self.product_id
+            "商品 {} 抓取完成：{} 条有效，中位数 {:.2}，回收价 {:.2}",
+            self.product_id, result.count, result.median_price, result.recycle_price
         );
         Ok(serde_json::json!({
             "saved": true,
-            "count": count,
-            "median_price": median,
-            "avg_price": avg,
-            "mode_price": mode,
+            "count": result.count,
+            "median_price": result.median_price,
+            "avg_price": result.avg_price,
+            "mode_price": result.mode_price,
             "recycle_factor": factor,
-            "recycle_price": recycle,
+            "recycle_price": result.recycle_price,
         }))
+    }
+}
+
+#[async_trait]
+impl ProductCrawler for CrawlAgentService {
+    async fn check_ai_available(&self) -> bool {
+        self.ai.is_available().await
+    }
+
+    async fn crawl_product(&self, product: &Product) -> Result<CrawlOutcome, DomainError> {
+        CrawlAgentService::crawl_product(self, product).await
     }
 }

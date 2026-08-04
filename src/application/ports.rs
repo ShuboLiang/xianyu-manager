@@ -24,6 +24,22 @@ pub struct AiEnvFallback {
     pub model: String,
 }
 
+/// 一次 LLM 调用的 token 用量（供应商未上报时整个为 None）。
+/// cached_input_tokens 为命中供应商前缀缓存的输入 token 数，可用于观察缓存是否生效。
+#[derive(Debug, Clone, Copy)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+}
+
+/// 单次对话补全的结果：文本 + token 用量
+#[derive(Debug, Clone)]
+pub struct AiCompletion {
+    pub text: String,
+    pub usage: Option<TokenUsage>,
+}
+
 /// AI 网关：抽象「对话补全」与「带工具的 agent 循环」两档能力。
 /// 实现方负责 HTTP 调用、鉴权、重试、工具循环等易变细节；
 /// rig 等第三方库类型不允许泄漏到该 trait 之外。
@@ -33,8 +49,8 @@ pub trait AiGateway: Send + Sync {
     /// 检查 AI 是否可用（已配置 DB 默认 provider 或环境变量兜底）
     async fn is_available(&self) -> bool;
 
-    /// 档位 1：单次对话补全
-    async fn complete(&self, system: &str, user: &str) -> Result<String, DomainError>;
+    /// 档位 1：单次对话补全（返回文本与 token 用量，供调用方落审计）
+    async fn complete(&self, system: &str, user: &str) -> Result<AiCompletion, DomainError>;
 
     /// 档位 2：带工具的 agent 循环（ReAct）。tools 由应用层定义，
     /// 实现方负责「模型请求工具 → 执行 → 结果回填 → 再调用」的循环，

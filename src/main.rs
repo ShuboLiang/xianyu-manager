@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use application::ai::classify_service::ClassifyService;
 use application::ai::crawl_agent_service::CrawlAgentService;
+use application::ai::crawl_direct_service::CrawlDirectService;
+use application::ai::crawl_switch::SwitchableCrawler;
 use application::ai_provider_service::AiProviderService;
 use application::ai_settings_service::AiSettingsService;
 use application::ai_tool_call_service::AiToolCallService;
@@ -106,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
         ai_gateway.clone(),
         ai_env_fallback,
     ));
-    let ai_tool_call_service = Arc::new(AiToolCallService::new(ai_tool_call_repo));
+    let ai_tool_call_service = Arc::new(AiToolCallService::new(ai_tool_call_repo.clone()));
 
     let classify_task_repo = Arc::new(InMemoryAiClassifyTaskRepository::default());
     let classify_service = Arc::new(ClassifyService::new(
@@ -116,19 +118,41 @@ async fn main() -> anyhow::Result<()> {
         ai_gateway.clone(),
     ));
 
-    // GATEWAY=webbridge 时，队列条目由 AI agent 抓取（搜索 → 筛选 8 条 → 中位数/回收价落库）
-    let crawl_agent = webbridge.map(|client| {
-        Arc::new(CrawlAgentService::new(
-            client,
-            product_repo.clone(),
-            item_repo.clone(),
-            ai_gateway,
-            settings_repo.clone(),
-            tag_repo.clone(),
-            config.recycle_factor,
-        ))
-    });
-    let ai_settings_service = Arc::new(AiSettingsService::new(settings_repo));
+    // GATEWAY=webbridge 时，队列条目由 AI 抓取（搜索 → 筛选 → 统计落库）。
+    // 两种实现同时构造，SwitchableCrawler 每次抓取读 app_settings 的 ai_crawl_mode
+    // （DB 设置 > AI_CRAWL_MODE 环境变量兜底）决定走哪条，前端切换后下一轮生效。
+    let crawler: Option<Arc<dyn crate::application::ai::crawl_shared::ProductCrawler>> =
+        webbridge.map(|client| {
+            let direct = Arc::new(CrawlDirectService::new(
+                client.clone(),
+                product_repo.clone(),
+                item_repo.clone(),
+                ai_gateway.clone(),
+                settings_repo.clone(),
+                tag_repo.clone(),
+                ai_tool_call_repo.clone(),
+                config.recycle_factor,
+            ));
+            let agent = Arc::new(CrawlAgentService::new(
+                client,
+                product_repo.clone(),
+                item_repo.clone(),
+                ai_gateway,
+                settings_repo.clone(),
+                tag_repo.clone(),
+                config.recycle_factor,
+            ));
+            Arc::new(SwitchableCrawler::new(
+                direct,
+                agent,
+                settings_repo.clone(),
+                config.ai_crawl_mode.clone(),
+            )) as Arc<dyn crate::application::ai::crawl_shared::ProductCrawler>
+        });
+    let ai_settings_service = Arc::new(AiSettingsService::new(
+        settings_repo,
+        config.ai_crawl_mode.clone(),
+    ));
 
     let queue_service = Arc::new(QueueService::new(
         queue_repo,
@@ -136,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
         tag_repo,
         gateway,
         item_repo.clone(),
-        crawl_agent,
+        crawler,
     ));
 
     let stats_service = Arc::new(StatsService::new(item_repo, product_repo));

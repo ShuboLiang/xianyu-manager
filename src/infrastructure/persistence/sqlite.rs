@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
 
-use crate::domain::ai_provider::{AiProvider, BaseUrl, ModelName, NewAiProvider, ProviderName};
+use crate::domain::ai_provider::{
+    AiProvider, BaseUrl, ExtraParams, ModelName, NewAiProvider, ProviderName,
+};
 use crate::domain::ai_tool_call::{AiToolCall, NewAiToolCall};
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus};
 use crate::domain::error::DomainError;
@@ -175,6 +177,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             model        TEXT NOT NULL,
             timeout_secs INTEGER NOT NULL DEFAULT 60,
             max_retries  INTEGER NOT NULL DEFAULT 2,
+            extra_params TEXT,
             is_default   INTEGER NOT NULL DEFAULT 0,
             created_at   INTEGER NOT NULL,
             updated_at   INTEGER NOT NULL
@@ -183,6 +186,19 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
     .execute(&*pool)
     .await
     .map_err(to_infra)?;
+
+    // 老库 ai_providers 表可能缺 extra_params 列，手动迁移（同 items.product_id 的做法）
+    let cols = sqlx::query("PRAGMA table_info(ai_providers)")
+        .fetch_all(&*pool)
+        .await
+        .map_err(to_infra)?;
+    if !cols.iter().any(|r| r.get::<String, _>("name") == "extra_params") {
+        sqlx::query("ALTER TABLE ai_providers ADD COLUMN extra_params TEXT")
+            .execute(&*pool)
+            .await
+            .map_err(to_infra)?;
+        tracing::info!("ai_providers 表迁移：补充 extra_params 列");
+    }
 
     // AI 工具调用审计（只增不改）
     sqlx::query(
@@ -193,12 +209,31 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             result      TEXT,
             error       TEXT,
             duration_ms INTEGER NOT NULL,
+            input_tokens        INTEGER,
+            output_tokens       INTEGER,
+            cached_input_tokens INTEGER,
             created_at  INTEGER NOT NULL
         )",
     )
     .execute(&*pool)
     .await
     .map_err(to_infra)?;
+
+    // 老库 ai_tool_calls 表可能缺 token 用量列，手动迁移（同 items.product_id 的做法）
+    let cols = sqlx::query("PRAGMA table_info(ai_tool_calls)")
+        .fetch_all(&*pool)
+        .await
+        .map_err(to_infra)?;
+    let col_names: Vec<String> = cols.iter().map(|r| r.get("name")).collect();
+    for col in ["input_tokens", "output_tokens", "cached_input_tokens"] {
+        if !col_names.iter().any(|c| c == col) {
+            sqlx::query(&format!("ALTER TABLE ai_tool_calls ADD COLUMN {col} INTEGER"))
+                .execute(&*pool)
+                .await
+                .map_err(to_infra)?;
+            tracing::info!("ai_tool_calls 表迁移：补充 {col} 列");
+        }
+    }
 
     // 应用级 KV 设置（用户自定义抓取提示词等）
     sqlx::query(
@@ -901,8 +936,8 @@ impl AiProviderRepository for SqliteAiProviderRepository {
         let now = crate::domain::crawl_task::now_unix();
         let result = sqlx::query(
             "INSERT INTO ai_providers
-             (name, base_url, api_key, model, timeout_secs, max_retries, is_default, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+             (name, base_url, api_key, model, timeout_secs, max_retries, extra_params, is_default, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(provider.name.as_str())
         .bind(provider.base_url.as_str())
@@ -910,6 +945,7 @@ impl AiProviderRepository for SqliteAiProviderRepository {
         .bind(provider.model.as_str())
         .bind(provider.timeout_secs as i64)
         .bind(provider.max_retries as i64)
+        .bind(provider.extra_params.as_ref().map(|p| p.as_str().to_string()))
         .bind(now as i64)
         .bind(now as i64)
         .execute(&self.pool)
@@ -924,6 +960,7 @@ impl AiProviderRepository for SqliteAiProviderRepository {
             model: provider.model.clone(),
             timeout_secs: provider.timeout_secs,
             max_retries: provider.max_retries,
+            extra_params: provider.extra_params.clone(),
             is_default: false,
             created_at: now,
             updated_at: now,
@@ -960,7 +997,7 @@ impl AiProviderRepository for SqliteAiProviderRepository {
         sqlx::query(
             "UPDATE ai_providers SET
              name = ?, base_url = ?, api_key = ?, model = ?,
-             timeout_secs = ?, max_retries = ?, is_default = ?, updated_at = ?
+             timeout_secs = ?, max_retries = ?, extra_params = ?, is_default = ?, updated_at = ?
              WHERE id = ?",
         )
         .bind(provider.name.as_str())
@@ -969,6 +1006,7 @@ impl AiProviderRepository for SqliteAiProviderRepository {
         .bind(provider.model.as_str())
         .bind(provider.timeout_secs as i64)
         .bind(provider.max_retries as i64)
+        .bind(provider.extra_params.as_ref().map(|p| p.as_str().to_string()))
         .bind(provider.is_default)
         .bind(provider.updated_at as i64)
         .bind(provider.id)
@@ -1017,6 +1055,11 @@ fn row_to_ai_provider(row: &SqliteRow) -> Result<AiProvider, DomainError> {
         model: ModelName::new(row.get::<String, _>("model")).map_err(to_infra_err)?,
         timeout_secs: row.get::<i64, _>("timeout_secs") as u32,
         max_retries: row.get::<i64, _>("max_retries") as u32,
+        extra_params: row
+            .get::<Option<String>, _>("extra_params")
+            .map(ExtraParams::new)
+            .transpose()
+            .map_err(to_infra_err)?,
         is_default: row.get("is_default"),
         created_at: row.get::<i64, _>("created_at") as u64,
         updated_at: row.get::<i64, _>("updated_at") as u64,
@@ -1040,14 +1083,17 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
     async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError> {
         let now = crate::domain::crawl_task::now_unix();
         let result = sqlx::query(
-            "INSERT INTO ai_tool_calls (tool_name, arguments, result, error, duration_ms, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ai_tool_calls (tool_name, arguments, result, error, duration_ms, input_tokens, output_tokens, cached_input_tokens, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&call.tool_name)
         .bind(&call.arguments)
         .bind(&call.result)
         .bind(&call.error)
         .bind(call.duration_ms as i64)
+        .bind(call.input_tokens.map(|v| v as i64))
+        .bind(call.output_tokens.map(|v| v as i64))
+        .bind(call.cached_input_tokens.map(|v| v as i64))
         .bind(now as i64)
         .execute(&self.pool)
         .await
@@ -1060,6 +1106,9 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
             result: call.result.clone(),
             error: call.error.clone(),
             duration_ms: call.duration_ms,
+            input_tokens: call.input_tokens,
+            output_tokens: call.output_tokens,
+            cached_input_tokens: call.cached_input_tokens,
             created_at: now,
         })
     }
@@ -1181,6 +1230,11 @@ fn row_to_ai_tool_call(row: &SqliteRow) -> Result<AiToolCall, DomainError> {
         result: row.get("result"),
         error: row.get("error"),
         duration_ms: row.get::<i64, _>("duration_ms") as u64,
+        input_tokens: row.get::<Option<i64>, _>("input_tokens").map(|v| v as u64),
+        output_tokens: row.get::<Option<i64>, _>("output_tokens").map(|v| v as u64),
+        cached_input_tokens: row
+            .get::<Option<i64>, _>("cached_input_tokens")
+            .map(|v| v as u64),
         created_at: row.get::<i64, _>("created_at") as u64,
     })
 }

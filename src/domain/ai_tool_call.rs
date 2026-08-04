@@ -12,6 +12,12 @@ pub struct NewAiToolCall {
     /// 失败错误信息
     pub error: Option<String>,
     pub duration_ms: u64,
+    /// LLM 调用的输入 token 数（纯工具行为 None；供应商未上报也为 None）
+    pub input_tokens: Option<u64>,
+    /// LLM 调用的输出 token 数
+    pub output_tokens: Option<u64>,
+    /// 命中供应商缓存的输入 token 数
+    pub cached_input_tokens: Option<u64>,
 }
 
 /// AI 工具调用记录（实体，只增不改）
@@ -23,6 +29,9 @@ pub struct AiToolCall {
     pub result: Option<String>,
     pub error: Option<String>,
     pub duration_ms: u64,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
     /// Unix 秒
     pub created_at: u64,
 }

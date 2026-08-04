@@ -10,8 +10,8 @@ use super::dto::{
     AiProviderCreateRequest, AiProviderResponse, AiProviderUpdateRequest, AiStatusResponse,
     AiToolCallListQuery, AiToolCallPurgePreviewResponse, AiToolCallPurgeRequest,
     AiToolCallPurgeResponse, AiToolCallResponse, ApiResponse, ClassifyProductsRequest,
-    ClassifyProductsResponse, ClassifyTaskResponse, CrawlPromptRequest, CrawlPromptResponse,
-    PageResponse, TestConnectionResponse,
+    ClassifyProductsResponse, ClassifyTaskResponse, CrawlModeResponse, CrawlPromptRequest,
+    CrawlPromptResponse, PageResponse, TestConnectionResponse, UpdateCrawlModeRequest,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -40,6 +40,7 @@ pub async fn create_provider(
             req.model,
             req.timeout_secs,
             req.max_retries,
+            req.extra_params,
         )
         .await;
     match result {
@@ -72,6 +73,7 @@ pub async fn update_provider(
         model: req.model,
         timeout_secs: req.timeout_secs,
         max_retries: req.max_retries,
+        extra_params: req.extra_params,
     };
     match state.ai_provider_service.update_provider(id, patch).await {
         Ok(p) => Json(ApiResponse::ok(p.into())),
@@ -141,6 +143,27 @@ pub async fn update_crawl_prompt(
         Ok(p) => Json(ApiResponse::ok(CrawlPromptResponse {
             custom_prompt: p,
         })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/ai/crawl-mode：读取当前生效的抓取模式（DB 设置 > 环境变量兜底）
+pub async fn get_crawl_mode(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<CrawlModeResponse>> {
+    match state.ai_settings_service.get_crawl_mode().await {
+        Ok(mode) => Json(ApiResponse::ok(CrawlModeResponse { mode })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// PUT /api/ai/crawl-mode：切换抓取模式（direct/agent，下一轮抓取生效）
+pub async fn update_crawl_mode(
+    State(state): State<AppState>,
+    Json(req): Json<UpdateCrawlModeRequest>,
+) -> Json<ApiResponse<CrawlModeResponse>> {
+    match state.ai_settings_service.save_crawl_mode(req.mode).await {
+        Ok(mode) => Json(ApiResponse::ok(CrawlModeResponse { mode })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

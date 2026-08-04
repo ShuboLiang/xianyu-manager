@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::application::ai::crawl_agent_service::CrawlAgentService;
+use crate::application::ai::crawl_shared::ProductCrawler;
 use crate::application::ports::XianYuGateway;
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus, Selector};
 use crate::domain::crawl_task::now_unix;
@@ -80,8 +80,8 @@ pub struct QueueService {
     tags: Arc<dyn TagRepository>,
     gateway: Arc<dyn XianYuGateway>,
     items: Arc<dyn ItemRepository>,
-    /// AI 抓取（WebBridge 真实浏览器 + AI 筛选）；None 时走 gateway 直接抓取（mock 开发路径）
-    crawl_agent: Option<Arc<CrawlAgentService>>,
+    /// AI 抓取（WebBridge 真实浏览器 + AI 筛选，agent/direct 两种实现）；None 时走 gateway 直接抓取（mock 开发路径）
+    crawler: Option<Arc<dyn ProductCrawler>>,
 }
 
 impl QueueService {
@@ -91,7 +91,7 @@ impl QueueService {
         tags: Arc<dyn TagRepository>,
         gateway: Arc<dyn XianYuGateway>,
         items: Arc<dyn ItemRepository>,
-        crawl_agent: Option<Arc<CrawlAgentService>>,
+        crawler: Option<Arc<dyn ProductCrawler>>,
     ) -> Self {
         Self {
             queues,
@@ -99,7 +99,7 @@ impl QueueService {
             tags,
             gateway,
             items,
-            crawl_agent,
+            crawler,
         }
     }
 
@@ -141,8 +141,8 @@ impl QueueService {
 
     /// AI 抓取路径下，入队前卡 AI 是否已配置；非 AI 路径（mock 等）直接通过
     async fn ensure_ai_available(&self) -> Result<(), DomainError> {
-        if let Some(agent) = &self.crawl_agent {
-            if !agent.check_ai_available().await {
+        if let Some(crawler) = &self.crawler {
+            if !crawler.check_ai_available().await {
                 tracing::warn!("拒绝入队：当前网关模式使用 AI 抓取，但 AI 未配置（无数据库默认 provider 也未设置 AI_API_KEY）");
                 return Err(DomainError::InvalidState(
                     "AI 未配置：请在「AI 配置」页设置 API 接口，或设置 AI_API_KEY 环境变量后重启".into(),
@@ -581,10 +581,10 @@ impl QueueService {
             entry.queue_id
         );
 
-        // AI 抓取路径：WebBridge 搜索 → AI 筛选 8 条 → 工具内算中位数/回收价并落库
-        if let Some(agent) = &self.crawl_agent {
+        // AI 抓取路径：搜索 → AI 筛选 → 统计落库（agent/direct 实现由 AI_CRAWL_MODE 决定）
+        if let Some(crawler) = &self.crawler {
             tracing::debug!("商品 {} 走 AI 抓取路径", product.id);
-            let outcome = agent
+            let outcome = crawler
                 .crawl_product(&product)
                 .await
                 .map_err(|e| EntryFailure::Failed(e.to_string()))?;

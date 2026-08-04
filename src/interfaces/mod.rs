@@ -133,6 +133,10 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
             "/ai/crawl-prompt",
             get(ai_handler::get_crawl_prompt).put(ai_handler::update_crawl_prompt),
         )
+        .route(
+            "/ai/crawl-mode",
+            get(ai_handler::get_crawl_mode).put(ai_handler::update_crawl_mode),
+        )
         .route("/ai/tool-calls", get(ai_handler::list_tool_calls))
         .route("/ai/tool-calls/names", get(ai_handler::list_tool_call_names))
         .route(

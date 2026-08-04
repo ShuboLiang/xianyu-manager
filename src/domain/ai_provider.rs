@@ -96,6 +96,56 @@ fn validate_timeout(timeout_secs: u32) -> Result<(), DomainError> {
     Ok(())
 }
 
+/// 额外请求参数（值对象）：非空时必须是合法 JSON 对象，请求时透传给
+/// OpenAI 兼容端点（如 DeepSeek 关思考 `{"thinking": {"type": "disabled"}}`、
+/// 千问 `{"enable_thinking": false}`）。端点私有参数不写死在代码里，由用户按供应商文档配置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraParams(String);
+
+impl ExtraParams {
+    pub fn new(raw: impl Into<String>) -> Result<Self, DomainError> {
+        let s = raw.into().trim().to_string();
+        if s.is_empty() {
+            return Err(DomainError::InvalidInput("额外请求参数不能为空".into()));
+        }
+        if s.chars().count() > 4096 {
+            return Err(DomainError::InvalidInput("额外请求参数过长（>4096 字符）".into()));
+        }
+        let v: serde_json::Value = serde_json::from_str(&s)
+            .map_err(|e| DomainError::InvalidInput(format!("额外请求参数不是合法 JSON: {e}")))?;
+        if !v.is_object() {
+            return Err(DomainError::InvalidInput(
+                "额外请求参数必须是 JSON 对象".into(),
+            ));
+        }
+        Ok(Self(s))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// 解析为 JSON（构造时已校验，不会失败）
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::from_str(&self.0).expect("ExtraParams 构造时已校验为合法 JSON")
+    }
+}
+
+impl fmt::Display for ExtraParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// 空白串归一化为 None；非空走 ExtraParams 校验
+fn normalize_extra_params(raw: Option<String>) -> Result<Option<ExtraParams>, DomainError> {
+    match raw {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => Ok(Some(ExtraParams::new(s)?)),
+    }
+}
+
 /// 创建 AI 供应商配置的入参（尚无 id）
 #[derive(Debug, Clone)]
 pub struct NewAiProvider {
@@ -105,10 +155,12 @@ pub struct NewAiProvider {
     pub model: ModelName,
     pub timeout_secs: u32,
     pub max_retries: u32,
+    pub extra_params: Option<ExtraParams>,
 }
 
 impl NewAiProvider {
-    /// 构造即校验：名称/端点/模型走值对象，超时至少 1 秒
+    /// 构造即校验：名称/端点/模型走值对象，超时至少 1 秒；
+    /// extra_params 空白归一化为 None，非空必须是合法 JSON 对象
     pub fn new(
         name: String,
         base_url: String,
@@ -116,6 +168,7 @@ impl NewAiProvider {
         model: String,
         timeout_secs: u32,
         max_retries: u32,
+        extra_params: Option<String>,
     ) -> Result<Self, DomainError> {
         validate_timeout(timeout_secs)?;
         Ok(Self {
@@ -125,6 +178,7 @@ impl NewAiProvider {
             model: ModelName::new(model)?,
             timeout_secs,
             max_retries,
+            extra_params: normalize_extra_params(extra_params)?,
         })
     }
 }
@@ -140,6 +194,7 @@ pub struct AiProvider {
     pub model: ModelName,
     pub timeout_secs: u32,
     pub max_retries: u32,
+    pub extra_params: Option<ExtraParams>,
     pub is_default: bool,
     /// Unix 秒
     pub created_at: u64,
@@ -163,6 +218,7 @@ impl AiProvider {
     }
 
     /// 部分字段更新；api_key 语义：None=保持不变，Some("")=清空，Some(v)=替换；
+    /// extra_params 语义相同（Some(v) 必须是合法 JSON 对象）；
     /// 超时至少 1 秒，非法输入报错（不静默钳制）
     pub fn update_info(
         &mut self,
@@ -172,6 +228,7 @@ impl AiProvider {
         model: ModelName,
         timeout_secs: u32,
         max_retries: u32,
+        extra_params: Option<String>,
     ) -> Result<(), DomainError> {
         validate_timeout(timeout_secs)?;
         self.name = name;
@@ -184,6 +241,9 @@ impl AiProvider {
         self.model = model;
         self.timeout_secs = timeout_secs;
         self.max_retries = max_retries;
+        if let Some(raw) = extra_params {
+            self.extra_params = normalize_extra_params(Some(raw))?;
+        }
         self.touch();
         Ok(())
     }
