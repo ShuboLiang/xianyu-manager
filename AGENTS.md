@@ -66,11 +66,11 @@ src/
 │   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
-│   ├── crawl_task.rs    #   CrawlTask 实体：状态流转规则只写在实体方法里
+│   ├── crawl_task.rs    #   CrawlTask 实体：状态流转规则只写在实体方法里（Pending→Running→Done/Failed，含 fail 守卫）；任务 ID 为 uuid crate 的 UUIDv4
 │   ├── tag.rs           #   Tag 实体（TagName 值对象），enabled=false 的标签不参与抓取
 │   ├── product.rs       #   Product 实体（待爬取商品）：名称/标签/备注 + 爬取统计字段
-│   ├── crawl_queue.rs   #   CrawlQueue/CrawlEntry 实体、Selector 值对象、状态机
-│   ├── ai_provider.rs   #   AiProvider 实体（OpenAI 兼容端点配置）
+│   ├── crawl_queue.rs   #   CrawlQueue/CrawlEntry 实体、Selector 值对象、状态机（队列与条目的状态流转都只能走实体方法）
+│   ├── ai_provider.rs   #   AiProvider 实体（OpenAI 兼容端点配置）+ ProviderName/BaseUrl/ModelName 值对象
 │   ├── ai_tool_call.rs  #   AiToolCall 审计实体
 │   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiToolCallRepository / SettingsRepository（KV 设置）
 │   └── error.rs         #   DomainError，全项目统一错误语义
@@ -109,7 +109,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
 ## 核心设计决策
 
 - **抓取是异步任务，不是同步请求**：`POST /api/crawl` 只创建任务并返回句柄，后台 tokio task 执行抓取，前端轮询 `GET /api/crawl/{id}`。防止多页抓取时 HTTP 超时。
-- **任务状态机**：`Pending → Running → Done/Failed`。只有 Pending 能 `start()`，只有 Running 能 `finish()`；规则在 `CrawlTask` 实体方法里，不允许在别处直接改状态。
+- **任务状态机**：`Pending → Running → Done/Failed`。只有 Pending 能 `start()`，只有 Running 能 `finish()`/`fail()`；规则在 `CrawlTask` 实体方法里，不允许在别处直接改状态。队列条目同理：只有 Pending 能 `start()`，只有 Running 能 `done()`/`fail()`/`skip()`（`CrawlEntry` 实体方法，worker 不直接改字段）。
 - **闲鱼网关是端口+实现（防腐层）**：`XianYuGateway` trait 定义在 `application/ports.rs`，实现（登录态、mtop 签名、解析）在 `infrastructure/xianyu_gateway.rs`。开发用 `GATEWAY=mock`。
 - **仓储端口**：`ItemRepository` / `CrawlTaskRepository` / `TagRepository` trait 在 domain。抓取商品数据（items 表，id=详情页 URL，重复抓取 INSERT OR REPLACE 覆盖）、标签、商品、队列、AI 配置/审计均已落 SQLite（`infrastructure/persistence/sqlite.rs`，连接时自动建表）；抓取任务与 AI 分类任务仍是内存实现（重启即失，可接受）。换存储时新增实现并在 `main.rs` 替换，内层零改动。
 - **标签管理**：标签（`domain/tag.rs`）管理「爬虫爬哪一类商品」，目前只含名称/启用状态/备注；抓取策略（关键词、频率、页数、过滤规则等）后续挂在标签上扩展。`enabled=false` 的标签届时不参与抓取。标签名全局唯一，冲突返回 `DomainError::Conflict`。
@@ -118,7 +118,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
   - **删除商品不删抓取历史**：items 主键是详情页 URL、跨商品共享覆盖，不专属某个商品，所以删商品（单个或批量）时 items 一律保留，仅由 `ItemRepository::detach_product` 把 `items.product_id` 置 NULL 解除归属（避免悬空引用，抓取数据页商品名显示「-」）。
   - **按标签批量删除商品**：`POST /api/products/batch-delete/preview` 预览命中商品与活跃队列占用数（仅警告不阻止），`POST /api/products/batch-delete` 执行（入参 `{tag_id}`，标签本身保留）；活跃队列中的条目沿用 worker 标记 `skipped` 兜底。前端入口在标签管理页每行的「删除商品」。
   - **抓取数据（items）删除**：`DELETE /api/items/{id}` 单条删除（id 是 TEXT，前端需 `encodeURIComponent`）；`POST /api/items/batch-delete/preview` + `POST /api/items/batch-delete` 按搜索条件批量删除，`search` 与列表搜索同一 WHERE 语义（标题或所属商品名模糊，删除侧用子查询表达商品名条件，SQLite DELETE 不支持 JOIN），空 search = 清空全部。删 items 不回退商品已算统计，但价格趋势图对应数据点会消失（确认框文案需写明）。预览/确认交互与商品批删一致：数量 + 前 10 条样本 + 「等 N 条」。
-- **列表分页**：`/api/items`、`/api/products`、`/api/ai/tool-calls` 三个列表接口服务端分页，统一 `page`（从 1 起）/ `page_size`（默认 20，clamp 1..=100，钳制逻辑在 `item_handler::normalize_page`），响应为 `PageResponse<T> { items, total, page, page_size }`（`PageResponse<T>` 泛型不经 ts-rs 导出，前端 `api.ts` 手写）。商品列表支持服务端排序（`sort_by`/`sort_dir`，排序列白名单枚举 `ProductSortColumn` 在 `domain/repository.rs`，SQL 空值沉底）；前端列头排序只是改查询条件回第 1 页。tags 和 queues 不分页（标签是全局选项源，队列轮询需全量活跃视图）。KPI 概览不从列表数据推导，由 `GET /api/stats` 提供（product_count / crawled_today=滚动 24h 窗口 / last_crawled_at）。
+- **列表分页**：`/api/items`、`/api/products`、`/api/ai/tool-calls` 三个列表接口服务端分页，统一 `page`（从 1 起）/ `page_size`（默认 20，clamp 1..=100，钳制逻辑在 `item_handler::normalize_page`），响应为 `PageResponse<T> { items, total, page, page_size }`（`PageResponse<T>` 泛型不经 ts-rs 导出，前端 `api.ts` 手写）。商品列表支持服务端排序（`sort_by`/`sort_dir`，排序列白名单枚举 `ProductSortColumn` 在 `domain/repository.rs`，SQL 列名映射在 `sqlite.rs::product_sort_column_sql`，SQL 空值沉底）；前端列头排序只是改查询条件回第 1 页。tags 和 queues 不分页（标签是全局选项源，队列轮询需全量活跃视图）。KPI 概览不从列表数据推导，由 `GET /api/stats` 提供（product_count / crawled_today=滚动 24h 窗口 / last_crawled_at）。
 - **抓取队列**（详细方案见 `docs/design-crawl-queue.md`）：
   - 队列 = 商品 id 快照（`crawl_entries`），入队后改标签/规则不影响本队列；删除商品时其条目由 worker 标记为 `skipped`，不阻塞队列。
   - 入队方式二选一：`selector`（`tag_all`/`tag_any`/`tag_exclude`/`stale_days`，维度间 AND）或 `product_ids`（手动勾选）；入队前可 `POST /api/queues/preview` 预览命中与跳过。
@@ -144,7 +144,8 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
 
 ## 代码约定
 
-- 校验放值对象构造函数（`Keyword::new` / `PageRange::new`），非法输入返回 `DomainError::InvalidInput`。
+- 校验放值对象构造函数（`Keyword::new` / `PageRange::new` / `ProductName::new` / `TagName::new` / `ProviderName::new` / `BaseUrl::new` / `ModelName::new`），非法输入返回 `DomainError::InvalidInput`；不做事后校验，也不用静默钳制（如 `timeout_secs.max(1)`）代替报错。
+- 领域层不出现 SQL 细节：`ProductSortColumn` 等枚举只定义白名单语义，「枚举 → SQL 列名」的映射写在 `infrastructure/persistence/sqlite.rs`。
 - handler 只做「HTTP ↔ 应用层」翻译：解析参数 → 调 service → 包成 `ApiResponse`。业务逻辑不进 handler。
 - 时间戳统一用 Unix 秒（`domain::crawl_task::now_unix()`），暂未引入 chrono。
 - 修改本文件涉及的约定后，同步更新此 `AGENTS.md`。
