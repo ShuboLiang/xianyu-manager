@@ -300,9 +300,11 @@ impl TagRepository for SqliteTagRepository {
 }
 
 fn row_to_tag(row: &SqliteRow) -> Result<Tag, DomainError> {
+    // 库中数据理论上都经过值对象校验；读回时非法数据归为基础设施错误
     Ok(Tag {
         id: row.get("id"),
-        name: TagName::new(row.get::<String, _>("name"))?,
+        name: TagName::new(row.get::<String, _>("name"))
+            .map_err(|e| DomainError::Infrastructure(format!("tags 行数据非法: {e}")))?,
         enabled: row.get("enabled"),
         remark: row.get("remark"),
         created_at: row.get::<i64, _>("created_at") as u64,
@@ -326,6 +328,8 @@ impl SqliteProductRepository {
 impl ProductRepository for SqliteProductRepository {
     async fn create(&self, product: &NewProduct) -> Result<Product, DomainError> {
         let now = crate::domain::crawl_task::now_unix();
+        // 商品行 + 标签关联是一个原子写入：任一失败整体回滚
+        let mut tx = self.pool.begin().await.map_err(to_infra)?;
         let result = sqlx::query(
             "INSERT INTO products (name, remark, created_at, updated_at)
              VALUES (?, ?, ?, ?)",
@@ -334,12 +338,13 @@ impl ProductRepository for SqliteProductRepository {
         .bind(&product.remark)
         .bind(now as i64)
         .bind(now as i64)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(to_infra)?;
         let id = result.last_insert_rowid();
 
-        self.save_tag_links(id, &product.tag_ids).await?;
+        save_tag_links(&mut tx, id, &product.tag_ids).await?;
+        tx.commit().await.map_err(to_infra)?;
 
         Ok(Product {
             id,
@@ -414,9 +419,11 @@ impl ProductRepository for SqliteProductRepository {
             ),
             None => "ORDER BY p.created_at ASC".to_string(),
         };
+        // 搜索词走 bind 参数（防注入/通配符错乱）；tag_id 是 i64 数值，拼入安全
         let mut where_parts: Vec<String> = Vec::new();
-        if let Some(q) = search {
-            where_parts.push(format!("p.name LIKE '%{q}%'"));
+        let escaped = search.map(like_escape);
+        if escaped.is_some() {
+            where_parts.push("p.name LIKE '%' || ? || '%' ESCAPE '\\'".to_string());
         }
         if let Some(tid) = tag_id {
             if tid == -1 {
@@ -436,9 +443,13 @@ impl ProductRepository for SqliteProductRepository {
             format!("WHERE {}", where_parts.join(" AND "))
         };
         let count_sql = format!("SELECT COUNT(*) AS c FROM products p {where_clause}");
-        let rows = sqlx::query(&format!(
-            "{PRODUCT_SELECT} {where_clause} {order_by} LIMIT ? OFFSET ?"
-        ))
+
+        let list_sql = format!("{PRODUCT_SELECT} {where_clause} {order_by} LIMIT ? OFFSET ?");
+        let mut list_q = sqlx::query(&list_sql);
+        if let Some(e) = &escaped {
+            list_q = list_q.bind(e.clone());
+        }
+        let rows = list_q
             .bind(limit as i64)
             .bind(offset as i64)
             .fetch_all(&self.pool)
@@ -448,7 +459,12 @@ impl ProductRepository for SqliteProductRepository {
             .iter()
             .map(row_to_product)
             .collect::<Result<Vec<_>, _>>()?;
-        let count_row = sqlx::query(&count_sql)
+
+        let mut count_q = sqlx::query(&count_sql);
+        if let Some(e) = &escaped {
+            count_q = count_q.bind(e.clone());
+        }
+        let count_row = count_q
             .fetch_one(&self.pool)
             .await
             .map_err(to_infra)?;
@@ -470,6 +486,9 @@ impl ProductRepository for SqliteProductRepository {
     }
 
     async fn update(&self, product: &Product) -> Result<(), DomainError> {
+        // 基本信息 UPDATE + 关联全量重建是一个原子写入：
+        // 中途失败不会留下「标签被清空」的半状态
+        let mut tx = self.pool.begin().await.map_err(to_infra)?;
         sqlx::query(
             "UPDATE products SET name = ?, remark = ?,
                 median_price = ?, avg_price = ?, crawled_count = ?,
@@ -485,17 +504,18 @@ impl ProductRepository for SqliteProductRepository {
         .bind(product.recycle_price)
         .bind(product.updated_at as i64)
         .bind(product.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(to_infra)?;
 
         // 关联全量重建（商品-标签数量很小，先删后插最简单可靠）
         sqlx::query("DELETE FROM product_tags WHERE product_id = ?")
             .bind(product.id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(to_infra)?;
-        self.save_tag_links(product.id, &product.tag_ids).await
+        save_tag_links(&mut tx, product.id, &product.tag_ids).await?;
+        tx.commit().await.map_err(to_infra)
     }
 
     async fn delete(&self, id: i64) -> Result<bool, DomainError> {
@@ -522,18 +542,21 @@ impl ProductRepository for SqliteProductRepository {
     }
 }
 
-impl SqliteProductRepository {
-    async fn save_tag_links(&self, product_id: i64, tag_ids: &[i64]) -> Result<(), DomainError> {
-        for tag_id in tag_ids {
-            sqlx::query("INSERT OR IGNORE INTO product_tags (product_id, tag_id) VALUES (?, ?)")
-                .bind(product_id)
-                .bind(tag_id)
-                .execute(&self.pool)
-                .await
-                .map_err(to_infra)?;
-        }
-        Ok(())
+/// 写入商品-标签关联（在调用方的事务内执行，保证与商品写入同生共死）
+async fn save_tag_links(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    product_id: i64,
+    tag_ids: &[i64],
+) -> Result<(), DomainError> {
+    for tag_id in tag_ids {
+        sqlx::query("INSERT OR IGNORE INTO product_tags (product_id, tag_id) VALUES (?, ?)")
+            .bind(product_id)
+            .bind(tag_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(to_infra)?;
     }
+    Ok(())
 }
 
 /// 商品基础查询：携带该商品全部标签 id（逗号拼接，无标签时为 NULL）
@@ -549,7 +572,8 @@ fn row_to_product(row: &SqliteRow) -> Result<Product, DomainError> {
         .unwrap_or_default();
     Ok(Product {
         id: row.get("id"),
-        name: ProductName::new(row.get::<String, _>("name"))?,
+        name: ProductName::new(row.get::<String, _>("name"))
+            .map_err(|e| DomainError::Infrastructure(format!("products 行数据非法: {e}")))?,
         tag_ids,
         remark: row.get("remark"),
         median_price: row.get("median_price"),
@@ -564,6 +588,14 @@ fn row_to_product(row: &SqliteRow) -> Result<Product, DomainError> {
 
 fn to_infra(e: sqlx::Error) -> DomainError {
     DomainError::Infrastructure(format!("sqlite: {e}"))
+}
+
+/// LIKE 模糊匹配的通配符转义（配合 ESCAPE '\'）：
+/// 用户输入中的 \ % _ 不再具有通配含义，只按字面匹配
+fn like_escape(raw: &str) -> String {
+    raw.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// ProductSortColumn（domain 白名单枚举）→ SQL 列名。
@@ -977,11 +1009,15 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
         tool_name: Option<&str>,
         failed_only: Option<bool>,
     ) -> Result<Page<AiToolCall>, DomainError> {
-        let where_clause = ai_tool_call_where(tool_name, failed_only);
+        let where_clause = ai_tool_call_where(tool_name.is_some(), failed_only);
         let list_sql = format!(
             "SELECT * FROM ai_tool_calls{where_clause} ORDER BY created_at DESC, id DESC LIMIT {limit} OFFSET {offset}"
         );
-        let rows = sqlx::query(&list_sql)
+        let mut list_q = sqlx::query(&list_sql);
+        if let Some(name) = tool_name {
+            list_q = list_q.bind(name);
+        }
+        let rows = list_q
             .fetch_all(&self.pool)
             .await
             .map_err(to_infra)?;
@@ -991,7 +1027,11 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
             .collect::<Result<Vec<_>, _>>()?;
 
         let count_sql = format!("SELECT COUNT(*) AS c FROM ai_tool_calls{where_clause}");
-        let count_row = sqlx::query(&count_sql)
+        let mut count_q = sqlx::query(&count_sql);
+        if let Some(name) = tool_name {
+            count_q = count_q.bind(name);
+        }
+        let count_row = count_q
             .fetch_one(&self.pool)
             .await
             .map_err(to_infra)?;
@@ -1037,12 +1077,12 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
     }
 }
 
-/// 列表筛选的 WHERE 子句。tool_name 走 LIKE 转义之外的精确匹配——工具名来自
-/// 程序内部常量而非自由输入，直接转义单引号拼入（避免多分支动态 bind 的复杂度）。
-fn ai_tool_call_where(tool_name: Option<&str>, failed_only: Option<bool>) -> String {
+/// 列表筛选的 WHERE 子句：tool_name 以占位符形式出现（调用方负责 bind），
+/// failed_only 是布尔值，拼入安全。
+fn ai_tool_call_where(has_tool_name: bool, failed_only: Option<bool>) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(name) = tool_name {
-        parts.push(format!("tool_name = '{}'", name.replace('\'', "''")));
+    if has_tool_name {
+        parts.push("tool_name = ?".to_string());
     }
     if let Some(failed) = failed_only {
         parts.push(if failed {
@@ -1124,28 +1164,25 @@ impl ItemRepository for SqliteItemRepository {
         limit: u64,
         search: Option<&str>,
     ) -> Result<Page<Item>, DomainError> {
-        let (join_clause, where_clause, count_sql) = match search {
-            Some(q) => {
-                let w = format!("WHERE i.title LIKE '%{q}%' OR p.name LIKE '%{q}%'");
-                let c = format!(
-                    "SELECT COUNT(*) AS c FROM items i LEFT JOIN products p ON i.product_id = p.id {w}"
-                );
-                (
-                    "LEFT JOIN products p ON i.product_id = p.id".to_string(),
-                    w,
-                    c,
-                )
-            }
-            None => (
-                String::new(),
-                String::new(),
-                "SELECT COUNT(*) AS c FROM items".to_string(),
-            ),
+        // 搜索词走 bind 参数（防注入/通配符错乱）：标题或所属商品名模糊匹配
+        let escaped = search.map(like_escape);
+        let (join_clause, where_clause) = if escaped.is_some() {
+            (
+                "LEFT JOIN products p ON i.product_id = p.id",
+                "WHERE i.title LIKE '%' || ? || '%' ESCAPE '\\' OR p.name LIKE '%' || ? || '%' ESCAPE '\\'",
+            )
+        } else {
+            ("", "")
         };
-        let sql = format!(
+
+        let list_sql = format!(
             "SELECT i.* FROM items i {join_clause} {where_clause} ORDER BY i.crawled_at DESC, i.id ASC LIMIT ? OFFSET ?"
         );
-        let rows = sqlx::query(&sql)
+        let mut list_q = sqlx::query(&list_sql);
+        if let Some(e) = &escaped {
+            list_q = list_q.bind(e.clone()).bind(e.clone());
+        }
+        let rows = list_q
             .bind(limit as i64)
             .bind(offset as i64)
             .fetch_all(&self.pool)
@@ -1153,7 +1190,13 @@ impl ItemRepository for SqliteItemRepository {
             .map_err(to_infra)?;
         let items = rows.iter().map(row_to_item).collect();
 
-        let count_row = sqlx::query(&count_sql)
+        let count_sql =
+            format!("SELECT COUNT(*) AS c FROM items i {join_clause} {where_clause}");
+        let mut count_q = sqlx::query(&count_sql);
+        if let Some(e) = &escaped {
+            count_q = count_q.bind(e.clone()).bind(e.clone());
+        }
+        let count_row = count_q
             .fetch_one(&self.pool)
             .await
             .map_err(to_infra)?;
@@ -1225,15 +1268,27 @@ impl ItemRepository for SqliteItemRepository {
 
     async fn delete_matching(&self, search: Option<&str>) -> Result<u64, DomainError> {
         // WHERE 语义与 list_paginated 的 search 一致（标题或所属商品名模糊匹配），
-        // SQLite 的 DELETE 不支持 JOIN，商品名条件改用子查询表达
-        let sql = match search {
-            Some(q) => format!(
-                "DELETE FROM items WHERE title LIKE '%{q}%'
-                 OR product_id IN (SELECT id FROM products WHERE name LIKE '%{q}%')"
-            ),
-            None => "DELETE FROM items".to_string(),
+        // SQLite 的 DELETE 不支持 JOIN，商品名条件改用子查询表达；搜索词走 bind 参数
+        let result = match search {
+            Some(q) => {
+                let escaped = like_escape(q);
+                sqlx::query(
+                    "DELETE FROM items WHERE title LIKE '%' || ? || '%' ESCAPE '\\'
+                     OR product_id IN (
+                         SELECT id FROM products WHERE name LIKE '%' || ? || '%' ESCAPE '\\'
+                     )",
+                )
+                .bind(&escaped)
+                .bind(&escaped)
+                .execute(&self.pool)
+                .await
+                .map_err(to_infra)?
+            }
+            None => sqlx::query("DELETE FROM items")
+                .execute(&self.pool)
+                .await
+                .map_err(to_infra)?,
         };
-        let result = sqlx::query(&sql).execute(&self.pool).await.map_err(to_infra)?;
         Ok(result.rows_affected())
     }
 }
@@ -1359,5 +1414,43 @@ mod item_repo_tests {
         assert_eq!(latest[2].id, "r2-a");
 
         assert!(repo.list_latest_for_product(999).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_with_quote_and_wildcards_matches_literally() {
+        let pool = connect(":memory:").await.unwrap();
+        let repo = SqliteItemRepository::new(pool);
+        let now = now_unix();
+
+        let mut special = sample("sp", 100.0, now);
+        special.title = "Men's 100% 全新".into();
+        repo.save_all(&[sample("plain", 50.0, now), special]).await.unwrap();
+
+        // 单引号不破坏 SQL，且能按字面命中
+        let page = repo.list_paginated(0, 10, Some("Men's")).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, "sp");
+
+        // % 不再作为通配符：只命中标题里真的含 "100%" 的记录
+        let page = repo.list_paginated(0, 10, Some("100%")).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, "sp");
+
+        // 普通关键词仍能模糊命中（"商品 plain" 的标题含「商品」）
+        let page = repo.list_paginated(0, 10, Some("商品")).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, "plain");
+
+        // 批删与列表同一 WHERE 语义：通配符按字面处理，不会误删
+        assert_eq!(repo.delete_matching(Some("100%")).await.unwrap(), 1);
+        assert_eq!(repo.list_paginated(0, 10, None).await.unwrap().total, 1);
+    }
+
+    #[test]
+    fn like_escape_escapes_wildcards() {
+        assert_eq!(like_escape("100%"), "100\\%");
+        assert_eq!(like_escape("a_b"), "a\\_b");
+        assert_eq!(like_escape("c\\d"), "c\\\\d");
+        assert_eq!(like_escape("普通文本"), "普通文本");
     }
 }

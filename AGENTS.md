@@ -150,6 +150,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
 
 - 校验放值对象构造函数（`Keyword::new` / `PageRange::new` / `ProductName::new` / `TagName::new` / `ProviderName::new` / `BaseUrl::new` / `ModelName::new`），非法输入返回 `DomainError::InvalidInput`；不做事后校验，也不用静默钳制（如 `timeout_secs.max(1)`）代替报错。
 - 领域层不出现 SQL 细节：`ProductSortColumn` 等枚举只定义白名单语义，「枚举 → SQL 列名」的映射写在 `infrastructure/persistence/sqlite.rs`。
+- 用户输入（搜索词、筛选值）一律走 bind 参数，不拼进 SQL；LIKE 模糊匹配用 `like_escape` 转义通配符（`\ % _`）+ `ESCAPE '\'`。多步写操作（商品行 + 标签关联等）必须包在 sqlx 事务里，不留半状态。
 - handler 只做「HTTP ↔ 应用层」翻译：解析参数 → 调 service → 包成 `ApiResponse`。业务逻辑不进 handler。
 - 时间戳统一用 Unix 秒（`domain::crawl_task::now_unix()`），暂未引入 chrono。
 - 修改本文件涉及的约定后，同步更新此 `AGENTS.md`。
