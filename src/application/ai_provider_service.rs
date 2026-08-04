@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::application::ports::{AiEnvFallback, AiGateway};
-use crate::domain::ai_provider::{AiProvider, NewAiProvider};
+use crate::domain::ai_provider::{AiProvider, BaseUrl, ModelName, NewAiProvider, ProviderName};
 use crate::domain::error::DomainError;
 use crate::domain::repository::AiProviderRepository;
 
@@ -66,16 +66,16 @@ impl AiProviderService {
         timeout_secs: u32,
         max_retries: u32,
     ) -> Result<AiProvider, DomainError> {
-        let new_provider = NewAiProvider {
-            name: name.trim().to_string(),
-            base_url: base_url.trim().to_string(),
-            api_key: normalize_key(api_key),
-            model: model.trim().to_string(),
-            timeout_secs: timeout_secs.max(1),
+        let new_provider = NewAiProvider::new(
+            name,
+            base_url,
+            normalize_key(api_key),
+            model,
+            timeout_secs,
             max_retries,
-        };
-        new_provider.validate()?;
-        self.ensure_name_available(&new_provider.name, None).await?;
+        )?;
+        self.ensure_name_available(new_provider.name.as_str(), None)
+            .await?;
         self.providers.create(&new_provider).await
     }
 
@@ -98,23 +98,28 @@ impl AiProviderService {
         let mut provider = self.get_provider(id).await?;
 
         let name = match patch.name {
-            Some(n) => n.trim().to_string(),
+            Some(n) => ProviderName::new(n)?,
             None => provider.name.clone(),
         };
         if name != provider.name {
-            self.ensure_name_available(&name, Some(id)).await?;
+            self.ensure_name_available(name.as_str(), Some(id)).await?;
         }
+        let base_url = match patch.base_url {
+            Some(u) => BaseUrl::new(u)?,
+            None => provider.base_url.clone(),
+        };
+        let model = match patch.model {
+            Some(m) => ModelName::new(m)?,
+            None => provider.model.clone(),
+        };
         provider.update_info(
             name,
-            patch.base_url.unwrap_or_else(|| provider.base_url.clone()),
+            base_url,
             patch.api_key,
-            patch.model.unwrap_or_else(|| provider.model.clone()),
+            model,
             patch.timeout_secs.unwrap_or(provider.timeout_secs),
             patch.max_retries.unwrap_or(provider.max_retries),
-        );
-        if provider.name.is_empty() {
-            return Err(DomainError::InvalidInput("配置名称不能为空".into()));
-        }
+        )?;
         self.providers.update(&provider).await?;
         Ok(provider)
     }
@@ -163,8 +168,8 @@ impl AiProviderService {
             return Ok(AiStatus {
                 configured: true,
                 source: Some("database".into()),
-                name: Some(p.name),
-                model: Some(p.model),
+                name: Some(p.name.as_str().to_string()),
+                model: Some(p.model.as_str().to_string()),
             });
         }
         if self.env_fallback.api_key.is_some() {

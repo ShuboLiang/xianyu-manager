@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
 
-use crate::domain::ai_provider::{AiProvider, NewAiProvider};
+use crate::domain::ai_provider::{AiProvider, BaseUrl, ModelName, NewAiProvider, ProviderName};
 use crate::domain::ai_tool_call::{AiToolCall, NewAiToolCall};
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus};
 use crate::domain::error::DomainError;
@@ -810,10 +810,10 @@ impl AiProviderRepository for SqliteAiProviderRepository {
              (name, base_url, api_key, model, timeout_secs, max_retries, is_default, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
-        .bind(&provider.name)
-        .bind(&provider.base_url)
+        .bind(provider.name.as_str())
+        .bind(provider.base_url.as_str())
         .bind(&provider.api_key)
-        .bind(&provider.model)
+        .bind(provider.model.as_str())
         .bind(provider.timeout_secs as i64)
         .bind(provider.max_retries as i64)
         .bind(now as i64)
@@ -869,10 +869,10 @@ impl AiProviderRepository for SqliteAiProviderRepository {
              timeout_secs = ?, max_retries = ?, is_default = ?, updated_at = ?
              WHERE id = ?",
         )
-        .bind(&provider.name)
-        .bind(&provider.base_url)
+        .bind(provider.name.as_str())
+        .bind(provider.base_url.as_str())
         .bind(&provider.api_key)
-        .bind(&provider.model)
+        .bind(provider.model.as_str())
         .bind(provider.timeout_secs as i64)
         .bind(provider.max_retries as i64)
         .bind(provider.is_default)
@@ -911,12 +911,16 @@ impl AiProviderRepository for SqliteAiProviderRepository {
 }
 
 fn row_to_ai_provider(row: &SqliteRow) -> Result<AiProvider, DomainError> {
+    // 库中数据理论上都经过值对象校验；读回时仍走构造函数兜底，非法数据报基础设施错误
+    let to_infra_err = |e: DomainError| {
+        DomainError::Infrastructure(format!("ai_providers 行数据非法: {e}"))
+    };
     Ok(AiProvider {
         id: row.get("id"),
-        name: row.get("name"),
-        base_url: row.get("base_url"),
+        name: ProviderName::new(row.get::<String, _>("name")).map_err(to_infra_err)?,
+        base_url: BaseUrl::new(row.get::<String, _>("base_url")).map_err(to_infra_err)?,
         api_key: row.get("api_key"),
-        model: row.get("model"),
+        model: ModelName::new(row.get::<String, _>("model")).map_err(to_infra_err)?,
         timeout_secs: row.get::<i64, _>("timeout_secs") as u32,
         max_retries: row.get::<i64, _>("max_retries") as u32,
         is_default: row.get("is_default"),

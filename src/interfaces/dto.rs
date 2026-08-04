@@ -394,10 +394,10 @@ impl From<AiProvider> for AiProviderResponse {
         let api_key = p.masked_key();
         Self {
             id: p.id,
-            name: p.name,
-            base_url: p.base_url,
+            name: p.name.as_str().to_string(),
+            base_url: p.base_url.as_str().to_string(),
             api_key,
-            model: p.model,
+            model: p.model.as_str().to_string(),
             timeout_secs: p.timeout_secs,
             max_retries: p.max_retries,
             is_default: p.is_default,

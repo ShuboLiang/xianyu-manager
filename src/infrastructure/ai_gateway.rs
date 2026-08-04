@@ -16,7 +16,7 @@ use rig_core::OneOrMany;
 use rig_core::providers::openai;
 
 use crate::application::ports::{AiEnvFallback, AiGateway, AiTool};
-use crate::domain::ai_provider::AiProvider;
+use crate::domain::ai_provider::{AiProvider, BaseUrl, ModelName, ProviderName};
 use crate::domain::ai_tool_call::NewAiToolCall;
 use crate::domain::error::DomainError;
 use crate::domain::repository::{AiProviderRepository, AiToolCallRepository};
@@ -62,12 +62,16 @@ impl RigAiGateway {
                 self.env.model
             );
             let now = crate::domain::crawl_task::now_unix();
+            // 环境变量属部署配置，非法值归为基础设施错误
+            let env_err = |e: DomainError| {
+                DomainError::Infrastructure(format!("AI 环境变量配置非法: {e}"))
+            };
             return Ok(AiProvider {
                 id: 0,
-                name: "env-fallback".into(),
-                base_url: self.env.base_url.clone(),
+                name: ProviderName::new("env-fallback").map_err(env_err)?,
+                base_url: BaseUrl::new(self.env.base_url.clone()).map_err(env_err)?,
                 api_key: Some(key.clone()),
-                model: self.env.model.clone(),
+                model: ModelName::new(self.env.model.clone()).map_err(env_err)?,
                 timeout_secs: 60,
                 max_retries: 2,
                 is_default: false,
@@ -88,7 +92,7 @@ impl RigAiGateway {
             .ok_or_else(|| DomainError::InvalidState("AI 配置未设置 API Key".into()))?;
         let client = openai::Client::builder()
             .api_key(key)
-            .base_url(&provider.base_url)
+            .base_url(provider.base_url.as_str())
             .build()
             .map_err(|e| DomainError::Infrastructure(format!("rig client: {e}")))?
             .completions_api();
@@ -162,7 +166,7 @@ impl AiGateway for RigAiGateway {
     ) -> Result<String, DomainError> {
         tracing::debug!("AI complete 请求: model={}, user_len={}", provider.model, user.len());
         let client = Self::build_client(provider)?;
-        let model = client.completion_model(&provider.model);
+        let model = client.completion_model(provider.model.as_str());
         let response = model
             .completion_request(Message::user(user))
             .preamble(system.to_string())
@@ -193,7 +197,7 @@ impl AiGateway for RigAiGateway {
     ) -> Result<String, DomainError> {
         let provider = self.resolve_provider().await?;
         let client = Self::build_client(&provider)?;
-        let model = client.completion_model(&provider.model);
+        let model = client.completion_model(provider.model.as_str());
         let tool_defs = Self::tool_definitions(tools);
         tracing::debug!(
             "AI agent 启动: model={}, tools={:?}, max_rounds={}",
