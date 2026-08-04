@@ -409,7 +409,7 @@ impl ProductRepository for SqliteProductRepository {
         let order_by = match sort {
             Some((col, desc)) => format!(
                 "ORDER BY ({col} IS NULL) ASC, {col} {dir}, p.id ASC",
-                col = col.as_sql(),
+                col = product_sort_column_sql(col),
                 dir = if desc { "DESC" } else { "ASC" },
             ),
             None => "ORDER BY p.created_at ASC".to_string(),
@@ -564,6 +564,18 @@ fn row_to_product(row: &SqliteRow) -> Result<Product, DomainError> {
 
 fn to_infra(e: sqlx::Error) -> DomainError {
     DomainError::Infrastructure(format!("sqlite: {e}"))
+}
+
+/// ProductSortColumn（domain 白名单枚举）→ SQL 列名。
+/// 映射属于持久化细节，只活在 infra 层；返回值全部来自此白名单，可安全拼入 SQL。
+fn product_sort_column_sql(col: ProductSortColumn) -> &'static str {
+    match col {
+        ProductSortColumn::MedianPrice => "p.median_price",
+        ProductSortColumn::AvgPrice => "p.avg_price",
+        ProductSortColumn::CrawledCount => "p.crawled_count",
+        ProductSortColumn::LastCrawledAt => "p.last_crawled_at",
+        ProductSortColumn::RecyclePrice => "p.recycle_price",
+    }
 }
 
 // ---------- 抓取队列 ----------

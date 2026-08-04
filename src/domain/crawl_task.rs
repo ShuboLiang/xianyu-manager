@@ -61,9 +61,18 @@ impl CrawlTask {
         Ok(())
     }
 
-    pub fn fail(&mut self, message: impl Into<String>) {
+    /// 只有 Running 能标记失败（与 finish 同一约束）：
+    /// 失败是「执行中出了错」，不允许覆盖已结束的任务状态
+    pub fn fail(&mut self, message: impl Into<String>) -> Result<(), DomainError> {
+        if self.status != TaskStatus::Running {
+            return Err(DomainError::InvalidState(format!(
+                "任务 {} 当前状态不是 Running，无法标记失败",
+                self.id
+            )));
+        }
         self.error = Some(message.into());
         self.status = TaskStatus::Failed;
+        Ok(())
     }
 }
 

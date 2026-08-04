@@ -40,17 +40,6 @@ impl ProductSortColumn {
             _ => None,
         }
     }
-
-    /// 对应的 SQL 列（只来自上面的白名单，可安全拼入 SQL）
-    pub fn as_sql(&self) -> &'static str {
-        match self {
-            Self::MedianPrice => "p.median_price",
-            Self::AvgPrice => "p.avg_price",
-            Self::CrawledCount => "p.crawled_count",
-            Self::LastCrawledAt => "p.last_crawled_at",
-            Self::RecyclePrice => "p.recycle_price",
-        }
-    }
 }
 
 #[async_trait]

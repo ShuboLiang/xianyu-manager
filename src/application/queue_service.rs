@@ -384,26 +384,31 @@ impl QueueService {
 
     /// 优雅暂停：当前条目跑完才停；条目只存 id，执行时现查商品
     async fn process_entry(&self, mut entry: CrawlEntry) {
-        entry.status = EntryStatus::Running;
+        if let Err(e) = entry.start() {
+            tracing::warn!("条目 #{} 无法启动: {e}", entry.id);
+            return;
+        }
         tracing::debug!("条目 #{} (product={}) 开始执行", entry.id, entry.product_id);
         let _ = self.queues.update_entry(&entry).await;
 
         let result = self.crawl_one(&entry).await;
-        match result {
+        let transition = match result {
             Ok(()) => {
-                entry.status = EntryStatus::Done;
-                entry.crawled_at = Some(now_unix());
                 tracing::debug!("条目 #{} 执行完成", entry.id);
+                entry.done()
             }
             Err(EntryFailure::Skipped) => {
-                entry.status = EntryStatus::Skipped;
                 tracing::debug!("条目 #{} 跳过（商品已删除）", entry.id);
+                entry.skip()
             }
             Err(EntryFailure::Failed(msg)) => {
-                entry.status = EntryStatus::Failed;
-                entry.error = Some(msg.clone());
                 tracing::warn!("条目 #{} 失败: {}", entry.id, msg);
+                entry.fail(msg)
             }
+        };
+        // 状态流转失败说明 worker 逻辑有 bug，记录但不阻断队列
+        if let Err(e) = transition {
+            tracing::error!("条目 #{} 状态流转失败: {e}", entry.id);
         }
         if let Err(e) = self.queues.update_entry(&entry).await {
             tracing::error!("更新条目 #{} 失败: {e}", entry.id);

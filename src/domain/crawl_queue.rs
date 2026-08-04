@@ -263,6 +263,51 @@ impl CrawlEntry {
             crawled_at: None,
         }
     }
+
+    /// 开始执行：只有 Pending 能进入 Running
+    pub fn start(&mut self) -> Result<(), DomainError> {
+        if self.status != EntryStatus::Pending {
+            return Err(DomainError::InvalidState(format!(
+                "条目 {} 当前状态不是 Pending，无法启动",
+                self.id
+            )));
+        }
+        self.status = EntryStatus::Running;
+        Ok(())
+    }
+
+    /// 执行完成：只有 Running 能进入 Done，并记录完成时间
+    pub fn done(&mut self) -> Result<(), DomainError> {
+        self.require_running("完成")?;
+        self.status = EntryStatus::Done;
+        self.crawled_at = Some(now_unix());
+        Ok(())
+    }
+
+    /// 执行失败：只有 Running 能进入 Failed，并记录错误信息
+    pub fn fail(&mut self, message: impl Into<String>) -> Result<(), DomainError> {
+        self.require_running("标记失败")?;
+        self.status = EntryStatus::Failed;
+        self.error = Some(message.into());
+        Ok(())
+    }
+
+    /// 跳过（如商品已删除）：只有 Running 能进入 Skipped
+    pub fn skip(&mut self) -> Result<(), DomainError> {
+        self.require_running("跳过")?;
+        self.status = EntryStatus::Skipped;
+        Ok(())
+    }
+
+    fn require_running(&self, action: &str) -> Result<(), DomainError> {
+        if self.status != EntryStatus::Running {
+            return Err(DomainError::InvalidState(format!(
+                "条目 {} 当前状态不是 Running，无法{action}",
+                self.id
+            )));
+        }
+        Ok(())
+    }
 }
 
 

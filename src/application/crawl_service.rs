@@ -71,7 +71,7 @@ impl CrawlService {
             }
             Err(e) => {
                 tracing::error!("抓取任务 {} 执行失败: {e}", task_id);
-                task.fail(e.to_string());
+                task.fail(e.to_string())?;
             }
         }
         self.tasks.save(&task).await
