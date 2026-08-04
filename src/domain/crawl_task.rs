@@ -28,7 +28,7 @@ pub struct CrawlTask {
 impl CrawlTask {
     pub fn new(keyword: Keyword, max_pages: PageRange) -> Self {
         Self {
-            id: uuid_v4(),
+            id: uuid::Uuid::new_v4().to_string(),
             keyword,
             max_pages,
             status: TaskStatus::Pending,
@@ -82,13 +82,4 @@ pub fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-fn uuid_v4() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    // 骨架阶段的简易随机 ID；如需要可换 uuid crate
-    let h1 = RandomState::new().build_hasher().finish();
-    let h2 = RandomState::new().build_hasher().finish();
-    format!("{h1:016x}{h2:016x}")
 }

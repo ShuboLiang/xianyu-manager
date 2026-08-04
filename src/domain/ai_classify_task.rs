@@ -1,9 +1,6 @@
 //! AI 自动打标签任务实体：承载异步任务状态流转的领域规则。
 //! 内存仓储，重启即失，同 CrawlTask 模式。
 
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
-
 use super::crawl_task::now_unix;
 use super::error::DomainError;
 
@@ -69,7 +66,7 @@ impl AiClassifyTask {
     pub fn new(product_ids: Vec<i64>, batch_size: usize) -> Self {
         let total = product_ids.len();
         Self {
-            id: short_uuid(),
+            id: uuid::Uuid::new_v4().to_string(),
             status: ClassifyTaskStatus::Pending,
             product_ids,
             batch_size,
@@ -153,10 +150,4 @@ impl AiClassifyTask {
         }
         (self.processed as f64 / self.total as f64) * 100.0
     }
-}
-
-fn short_uuid() -> String {
-    let h1 = RandomState::new().build_hasher().finish();
-    let h2 = RandomState::new().build_hasher().finish();
-    format!("{h1:016x}{h2:016x}")
 }
