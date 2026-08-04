@@ -28,6 +28,8 @@ const MAX_ROUNDS: u32 = 10;
 pub struct CrawlOutcome {
     pub median_price: f64,
     pub avg_price: f64,
+    /// 常见价位（百元档分档众数）
+    pub mode_price: Option<f64>,
     pub count: u32,
     pub recycle_price: f64,
 }
@@ -360,6 +362,8 @@ impl AiTool for SaveCrawlResultTool {
             (prices[count / 2 - 1] + prices[count / 2]) / 2.0
         };
         let avg = prices.iter().sum::<f64>() / count as f64;
+        // 常见价位：百元档分档众数（原始众数对连续价格没有意义）
+        let mode = crate::domain::product::mode_price(&prices);
         // 回收价 = 中位数 × 系数：AI 可按用户自定义定价规则传 recycle_factor，
         // 省略时用默认系数（RECYCLE_FACTOR，默认 0.9）
         let factor = match args.get("recycle_factor") {
@@ -381,13 +385,14 @@ impl AiTool for SaveCrawlResultTool {
             .find(self.product_id)
             .await?
             .ok_or_else(|| DomainError::NotFound(format!("商品 {}", self.product_id)))?;
-        product.record_crawl_result(median, avg, count as u32, recycle);
+        product.record_crawl_result(median, avg, mode, count as u32, recycle);
         self.products.update(&product).await?;
         let _ = self.items.save_all(&items).await;
 
         let result = CrawlOutcome {
             median_price: median,
             avg_price: avg,
+            mode_price: mode,
             count: count as u32,
             recycle_price: recycle,
         };
@@ -402,6 +407,7 @@ impl AiTool for SaveCrawlResultTool {
             "count": count,
             "median_price": median,
             "avg_price": avg,
+            "mode_price": mode,
             "recycle_factor": factor,
             "recycle_price": recycle,
         }))

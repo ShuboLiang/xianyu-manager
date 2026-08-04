@@ -33,6 +33,35 @@ pub struct PreviewResult {
     pub skipped: Vec<Product>,
 }
 
+/// 历史队列清理条件：二选一（恰填一个）
+#[derive(Debug)]
+pub enum QueuePurgeCriteria {
+    /// 清理 N 天前结束的队列（0 = 清空全部历史）
+    BeforeDays(u32),
+    /// 仅保留最近结束的 N 条，其余清掉
+    KeepLatest(u64),
+}
+
+impl QueuePurgeCriteria {
+    /// 校验 before_days / keep_latest 恰填一个并构造条件
+    pub fn new(before_days: Option<u32>, keep_latest: Option<u64>) -> Result<Self, DomainError> {
+        match (before_days, keep_latest) {
+            (Some(d), None) => Ok(Self::BeforeDays(d)),
+            (None, Some(n)) => Ok(Self::KeepLatest(n)),
+            _ => Err(DomainError::InvalidInput(
+                "清理条件必须二选一：before_days 或 keep_latest 恰填一个".into(),
+            )),
+        }
+    }
+}
+
+/// 历史队列清理预览/结果：命中（或已删）的队列数与条目总数
+#[derive(Debug)]
+pub struct QueuePurgeOutcome {
+    pub queues: u64,
+    pub entries: u64,
+}
+
 /// 队列 + 条目状态计数
 #[derive(Debug)]
 pub struct QueueProgress {
@@ -145,6 +174,7 @@ impl QueueService {
         interval_secs: u32,
     ) -> Result<(CrawlQueue, PreviewResult), DomainError> {
         self.ensure_ai_available().await?;
+        let name = self.target_summary(&target).await?;
         let preview = self.preview(target).await?;
         if preview.to_add.is_empty() {
             return Err(DomainError::InvalidInput(
@@ -157,7 +187,7 @@ impl QueueService {
         };
         let queue = self
             .queues
-            .create_queue(&CrawlQueue::new(status, interval_secs.max(1)))
+            .create_queue(&CrawlQueue::new(status, interval_secs.max(1), name))
             .await?;
         let ids: Vec<i64> = preview.to_add.iter().map(|p| p.id).collect();
         self.queues.add_entries(queue.id, &ids).await?;
@@ -173,7 +203,7 @@ impl QueueService {
         target: EnqueueTarget,
     ) -> Result<PreviewResult, DomainError> {
         self.ensure_ai_available().await?;
-        let queue = self
+        let mut queue = self
             .queues
             .find_queue(queue_id)
             .await?
@@ -186,10 +216,68 @@ impl QueueService {
                 )))
             }
         }
+        let summary = self.target_summary(&target).await?;
         let preview = self.preview(target).await?;
         let ids: Vec<i64> = preview.to_add.iter().map(|p| p.id).collect();
         self.queues.add_entries(queue_id, &ids).await?;
+        // 追加的条件并入队列名称（用户手动改过名的除外）
+        queue.append_condition(&summary);
+        self.queues.update_queue(&queue).await?;
         Ok(preview)
+    }
+
+    /// 队列手动改名
+    pub async fn rename(&self, id: i64, name: String) -> Result<CrawlQueue, DomainError> {
+        let mut queue = self
+            .queues
+            .find_queue(id)
+            .await?
+            .ok_or_else(|| DomainError::NotFound(format!("队列 {id}")))?;
+        queue.rename(name)?;
+        self.queues.update_queue(&queue).await?;
+        Ok(queue)
+    }
+
+    /// 把入队目标翻译成人类可读的条件摘要，作为队列名称（或追加时并入名称）
+    async fn target_summary(&self, target: &EnqueueTarget) -> Result<String, DomainError> {
+        match target {
+            EnqueueTarget::ProductIds(_) => Ok("手动勾选".into()),
+            EnqueueTarget::Selector(s) => {
+                let mut parts = Vec::new();
+                if !s.tag_all.is_empty() {
+                    parts.push(format!("标签：{}", self.tag_names(&s.tag_all).await?.join("＋")));
+                }
+                if !s.tag_any.is_empty() {
+                    parts.push(format!(
+                        "标签：{}",
+                        self.tag_names(&s.tag_any).await?.join(" 或 ")
+                    ));
+                }
+                if !s.tag_exclude.is_empty() {
+                    parts.push(format!("排除：{}", self.tag_names(&s.tag_exclude).await?.join("、")));
+                }
+                if let Some(days) = s.stale_days {
+                    parts.push(format!("{days} 天未爬"));
+                }
+                Ok(parts.join(" ∧ "))
+            }
+        }
+    }
+
+    /// 标签 id 列表 → 名称列表（-1 = 无标签伪 id；已被删的标签显示「标签#id」兜底）
+    async fn tag_names(&self, ids: &[i64]) -> Result<Vec<String>, DomainError> {
+        let mut names = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if id == -1 {
+                names.push("无标签".into());
+                continue;
+            }
+            names.push(match self.tags.find(id).await? {
+                Some(t) => t.name.as_str().to_string(),
+                None => format!("标签#{id}"),
+            });
+        }
+        Ok(names)
     }
 
     /// 把入队目标解析成商品列表（去重前）
@@ -291,6 +379,69 @@ impl QueueService {
         self.queues.delete_queue(id).await?;
         tracing::info!("删除队列 {id}");
         Ok(())
+    }
+
+    // ---------- 历史队列清理 ----------
+
+    /// 预览清理：返回命中条件的队列数与条目总数（不落库）
+    pub async fn purge_preview(
+        &self,
+        criteria: QueuePurgeCriteria,
+    ) -> Result<QueuePurgeOutcome, DomainError> {
+        let targets = self.resolve_purge_targets(&criteria).await?;
+        self.count_outcome(&targets).await
+    }
+
+    /// 执行清理：删除命中的历史队列及其条目，返回实际删除数量
+    pub async fn purge(&self, criteria: QueuePurgeCriteria) -> Result<QueuePurgeOutcome, DomainError> {
+        let targets = self.resolve_purge_targets(&criteria).await?;
+        let outcome = self.count_outcome(&targets).await?;
+        for q in &targets {
+            self.queues.delete_queue(q.id).await?;
+        }
+        if outcome.queues > 0 {
+            tracing::info!("清理历史队列：{} 个队列、{} 条条目", outcome.queues, outcome.entries);
+        }
+        Ok(outcome)
+    }
+
+    /// 按清理条件筛出目标队列（只作用于 done/cancelled 的历史队列，活跃队列永不受影响）
+    async fn resolve_purge_targets(
+        &self,
+        criteria: &QueuePurgeCriteria,
+    ) -> Result<Vec<CrawlQueue>, DomainError> {
+        let finished = self
+            .queues
+            .list_by_status(&[QueueStatus::Done, QueueStatus::Cancelled])
+            .await?;
+        let targets = match criteria {
+            QueuePurgeCriteria::BeforeDays(days) => {
+                let threshold = now_unix().saturating_sub(*days as u64 * 86400);
+                finished
+                    .into_iter()
+                    .filter(|q| q.finished_at.map_or(true, |t| t <= threshold))
+                    .collect()
+            }
+            QueuePurgeCriteria::KeepLatest(keep) => {
+                // 按结束时间从新到旧排序（无结束时间的排最后），保留前 N 条
+                let mut sorted = finished;
+                sorted.sort_by_key(|q| std::cmp::Reverse(q.finished_at.unwrap_or(0)));
+                sorted.into_iter().skip(*keep as usize).collect()
+            }
+        };
+        Ok(targets)
+    }
+
+    /// 统计一组队列的队列数与条目总数
+    async fn count_outcome(&self, queues: &[CrawlQueue]) -> Result<QueuePurgeOutcome, DomainError> {
+        let mut entries = 0u64;
+        for q in queues {
+            entries += self.queues.list_entries(q.id).await?.len() as u64;
+        }
+        Ok(QueuePurgeOutcome {
+            queues: queues.len() as u64,
+            entries,
+        })
     }
 
     async fn mutate_queue(
@@ -475,10 +626,11 @@ impl QueueService {
             let avg = prices.iter().sum::<f64>() / count as f64;
             (median, avg)
         };
+        let mode = crate::domain::product::mode_price(&prices);
 
         // 回收价本期用均价占位（见方案 6 节）
         let mut product = product;
-        product.record_crawl_result(median, avg, count as u32, avg.floor());
+        product.record_crawl_result(median, avg, mode, count as u32, avg.floor());
         self.products
             .update(&product)
             .await

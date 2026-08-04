@@ -15,19 +15,20 @@ impl ItemService {
         Self { items }
     }
 
-    /// 按抓取时间倒序分页（page 从 1 开始，调用方已完成钳制）；search 为可选商品名/标题模糊搜索
+    /// 按抓取时间倒序分页（page 从 1 开始，调用方已完成钳制）；search 为可选商品名/标题模糊搜索，tag_id 为可选标签筛选
     pub async fn list_paginated(
         &self,
         page: u64,
         page_size: u64,
         search: Option<String>,
+        tag_id: Option<i64>,
     ) -> Result<Page<Item>, DomainError> {
         let search_str = search.as_deref().and_then(|s| {
             let trimmed = s.trim();
             if trimmed.is_empty() { None } else { Some(trimmed) }
         });
         self.items
-            .list_paginated((page - 1) * page_size, page_size, search_str)
+            .list_paginated((page - 1) * page_size, page_size, search_str, tag_id)
             .await
     }
 
@@ -49,7 +50,7 @@ impl ItemService {
         search: Option<String>,
     ) -> Result<ItemDeletePreview, DomainError> {
         let search_str = normalize_search(search.as_deref());
-        let page = self.items.list_paginated(0, 10, search_str).await?;
+        let page = self.items.list_paginated(0, 10, search_str, None).await?;
         Ok(ItemDeletePreview {
             total: page.total,
             sample: page.items.into_iter().map(|i| i.title).collect(),

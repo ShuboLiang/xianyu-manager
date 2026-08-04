@@ -32,7 +32,8 @@ impl ItemRepository for InMemoryItemRepository {
         Ok(())
     }
 
-    async fn list_paginated(&self, offset: u64, limit: u64, search: Option<&str>) -> Result<Page<Item>, DomainError> {
+    // tag_id 在内存实现中忽略（内存仓储仅作备选，标签筛选只在 SQLite 实现）
+    async fn list_paginated(&self, offset: u64, limit: u64, search: Option<&str>, _tag_id: Option<i64>) -> Result<Page<Item>, DomainError> {
         let guard = self
             .items
             .lock()

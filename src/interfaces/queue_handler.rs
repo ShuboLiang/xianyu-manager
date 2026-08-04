@@ -1,12 +1,13 @@
 use axum::extract::{Json, Path, State};
 
-use crate::application::queue_service::{EnqueueTarget, PreviewResult};
+use crate::application::queue_service::{EnqueueTarget, PreviewResult, QueuePurgeCriteria};
 use crate::domain::error::DomainError;
 use crate::domain::product::Product;
 
 use super::dto::{
     ApiResponse, EnqueueRequest, EnqueueResponse, PreviewRequest, PreviewResponse,
-    ProductBriefResponse, QueueResponse,
+    ProductBriefResponse, QueuePurgeOutcomeResponse, QueuePurgeRequest, QueueResponse,
+    RenameQueueRequest,
 };
 use super::AppState;
 
@@ -129,6 +130,54 @@ pub async fn delete_queue(
 ) -> Json<ApiResponse<()>> {
     match state.queue_service.delete(id).await {
         Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// PUT /api/queues/{id}/name：队列手动改名
+pub async fn rename_queue(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<RenameQueueRequest>,
+) -> Json<ApiResponse<()>> {
+    match state.queue_service.rename(id, req.name).await {
+        Ok(_) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/queues/purge/preview：预览历史队列清理（不落库）
+pub async fn purge_preview(
+    State(state): State<AppState>,
+    Json(req): Json<QueuePurgeRequest>,
+) -> Json<ApiResponse<QueuePurgeOutcomeResponse>> {
+    let criteria = match QueuePurgeCriteria::new(req.before_days, req.keep_latest) {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::err(e.to_string())),
+    };
+    match state.queue_service.purge_preview(criteria).await {
+        Ok(o) => Json(ApiResponse::ok(QueuePurgeOutcomeResponse {
+            queues: o.queues,
+            entries: o.entries,
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/queues/purge：执行历史队列清理（只作用于 done/cancelled）
+pub async fn purge(
+    State(state): State<AppState>,
+    Json(req): Json<QueuePurgeRequest>,
+) -> Json<ApiResponse<QueuePurgeOutcomeResponse>> {
+    let criteria = match QueuePurgeCriteria::new(req.before_days, req.keep_latest) {
+        Ok(c) => c,
+        Err(e) => return Json(ApiResponse::err(e.to_string())),
+    };
+    match state.queue_service.purge(criteria).await {
+        Ok(o) => Json(ApiResponse::ok(QueuePurgeOutcomeResponse {
+            queues: o.queues,
+            entries: o.entries,
+        })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

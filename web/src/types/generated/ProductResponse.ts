@@ -4,4 +4,8 @@ export type ProductResponse = { id: number, name: string, tag_ids: Array<number>
 /**
  * 标签名列表，与 tag_ids 一一对应；无标签时为空数组
  */
-tag_names: Array<string>, remark: string | null, median_price: number | null, avg_price: number | null, crawled_count: number | null, last_crawled_at: number | null, recycle_price: number | null, created_at: number, updated_at: number, };
+tag_names: Array<string>, remark: string | null, median_price: number | null, avg_price: number | null, 
+/**
+ * 常见价位（自适应档宽分档众数的档位下界；档宽按量级：<100→10，<1000→50，<10000→100，≥10000→500）
+ */
+mode_price: number | null, crawled_count: number | null, last_crawled_at: number | null, recycle_price: number | null, created_at: number, updated_at: number, };

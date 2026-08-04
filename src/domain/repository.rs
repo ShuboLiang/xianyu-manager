@@ -24,6 +24,7 @@ pub struct Page<T> {
 pub enum ProductSortColumn {
     MedianPrice,
     AvgPrice,
+    ModePrice,
     CrawledCount,
     LastCrawledAt,
     RecyclePrice,
@@ -34,6 +35,7 @@ impl ProductSortColumn {
         match s {
             "median_price" => Some(Self::MedianPrice),
             "avg_price" => Some(Self::AvgPrice),
+            "mode_price" => Some(Self::ModePrice),
             "crawled_count" => Some(Self::CrawledCount),
             "last_crawled_at" => Some(Self::LastCrawledAt),
             "recycle_price" => Some(Self::RecyclePrice),
@@ -45,12 +47,13 @@ impl ProductSortColumn {
 #[async_trait]
 pub trait ItemRepository: Send + Sync {
     async fn save_all(&self, items: &[Item]) -> Result<(), DomainError>;
-    /// 按抓取时间倒序分页；search 为可选模糊匹配（标题/商品名）
+    /// 按抓取时间倒序分页；search 为可选模糊匹配（标题/商品名），tag_id 为可选标签筛选（命中挂在该标签下的商品的记录）
     async fn list_paginated(
         &self,
         offset: u64,
         limit: u64,
         search: Option<&str>,
+        tag_id: Option<i64>,
     ) -> Result<Page<Item>, DomainError>;
     /// 指定时间戳以来的抓取数量（KPI「24h 抓取」用）
     async fn count_since(&self, unix_ts: u64) -> Result<u64, DomainError>;

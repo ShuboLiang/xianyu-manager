@@ -11,7 +11,7 @@ pub mod tag_handler;
 
 use std::sync::Arc;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -119,11 +119,14 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         )
         .route("/queues/pause-all", post(queue_handler::pause_all))
         .route("/queues/resume-all", post(queue_handler::resume_all))
+        .route("/queues/purge", post(queue_handler::purge))
+        .route("/queues/purge/preview", post(queue_handler::purge_preview))
         .route("/queues/{id}", get(queue_handler::get_queue).delete(queue_handler::delete_queue))
         .route("/queues/{id}/entries", post(queue_handler::append_entries))
         .route("/queues/{id}/pause", post(queue_handler::pause_queue))
         .route("/queues/{id}/resume", post(queue_handler::resume_queue))
         .route("/queues/{id}/cancel", post(queue_handler::cancel_queue))
+        .route("/queues/{id}/name", put(queue_handler::rename_queue))
         // AI 配置
         .route("/ai/status", get(ai_handler::ai_status))
         .route(

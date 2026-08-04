@@ -176,6 +176,9 @@ impl EntryStatus {
     }
 }
 
+/// 队列名称最大长度（按字符计，超出追加合并时截断）
+pub const QUEUE_NAME_MAX_LEN: usize = 40;
+
 /// 抓取队列（实体）。状态流转只能通过实体方法进行。
 #[derive(Debug, Clone)]
 pub struct CrawlQueue {
@@ -183,19 +186,55 @@ pub struct CrawlQueue {
     pub status: QueueStatus,
     /// 每条抓取之间的基础间隔（秒），执行时叠加随机抖动
     pub interval_secs: u32,
+    /// 队列名称：入队时由圈选条件自动生成（「标签：显卡 ∧ 7 天未爬」），也可手动改名
+    pub name: String,
+    /// true = 用户手动改过名，之后追加条目不再自动拼条件
+    pub name_custom: bool,
     pub created_at: u64,
     pub finished_at: Option<u64>,
 }
 
 impl CrawlQueue {
     /// 新队列：执行位空闲则 Running，否则 Waiting 排队
-    pub fn new(status: QueueStatus, interval_secs: u32) -> Self {
+    pub fn new(status: QueueStatus, interval_secs: u32, name: String) -> Self {
         Self {
             id: 0,
             status,
             interval_secs,
+            name,
+            name_custom: false,
             created_at: now_unix(),
             finished_at: None,
+        }
+    }
+
+    /// 手动改名：改名后追加条目不再自动拼条件
+    pub fn rename(&mut self, name: impl Into<String>) -> Result<(), DomainError> {
+        let name = name.into().trim().to_string();
+        if name.is_empty() {
+            return Err(DomainError::InvalidInput("队列名称不能为空".into()));
+        }
+        if name.chars().count() > QUEUE_NAME_MAX_LEN {
+            return Err(DomainError::InvalidInput(format!(
+                "队列名称最长 {QUEUE_NAME_MAX_LEN} 个字符"
+            )));
+        }
+        self.name = name;
+        self.name_custom = true;
+        Ok(())
+    }
+
+    /// 追加条目时把新条件并入名称；用户改过名则不动。超长截断为「…」
+    pub fn append_condition(&mut self, condition: &str) {
+        if self.name_custom {
+            return;
+        }
+        let merged = format!("{} ＋ {}", self.name, condition);
+        if merged.chars().count() > QUEUE_NAME_MAX_LEN {
+            let kept: String = merged.chars().take(QUEUE_NAME_MAX_LEN - 1).collect();
+            self.name = format!("{kept}…");
+        } else {
+            self.name = merged;
         }
     }
 

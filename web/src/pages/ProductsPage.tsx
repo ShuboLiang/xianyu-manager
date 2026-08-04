@@ -34,7 +34,7 @@ import type {
   ProductBatchDeleteResponse,
 } from '@/types/api';
 
-type SortKey = 'median_price' | 'avg_price' | 'crawled_count' | 'last_crawled_at' | 'recycle_price';
+type SortKey = 'median_price' | 'avg_price' | 'mode_price' | 'crawled_count' | 'last_crawled_at' | 'recycle_price';
 
 interface ProductsQuery {
   page: number;
@@ -445,6 +445,22 @@ export function ProductsPage() {
       sortOrder: sortOrderOf('avg_price'),
       align: 'right',
       render: (v: number | null) => <span className="num">{fmtPrice(v)}</span>,
+    },
+    {
+      title: '常见价位',
+      dataIndex: 'mode_price',
+      sorter: true,
+      sortOrder: sortOrderOf('mode_price'),
+      align: 'right',
+      render: (v: number | null) => {
+        // 档宽与后端 mode_bucket_width 规则一致：按价格量级自适应
+        const w = v === null ? 0 : v < 100 ? 10 : v < 1000 ? 50 : v < 10000 ? 100 : 500;
+        return (
+          <span className="num" title="分档众数：商品数最多的价格区间（档宽随价格量级自适应）">
+            {v === null ? '-' : `¥${v}–${v + w}`}
+          </span>
+        );
+      },
     },
     {
       title: '爬取数量',

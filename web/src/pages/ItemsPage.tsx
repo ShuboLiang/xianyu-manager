@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
-import { App as AntApp, Button, Card, Input, Space, Table, Typography } from 'antd';
+import { App as AntApp, Button, Card, Input, Select, Space, Table, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/PageHeader';
 import { apiDelete, apiGet, apiPost, fmtTime } from '@/lib/api';
+import { useTags } from '@/lib/queries';
 import type {
   Item,
   ItemBatchDeletePreviewResponse,
@@ -15,12 +16,14 @@ interface ItemsQuery {
   page: number;
   pageSize: number;
   search: string;
+  tagId: number | null;
 }
 
 export function ItemsPage() {
   const { message, modal } = AntApp.useApp();
   const queryClient = useQueryClient();
-  const [query, setQuery] = useState<ItemsQuery>({ page: 1, pageSize: 20, search: '' });
+  const { data: tags = [] } = useTags();
+  const [query, setQuery] = useState<ItemsQuery>({ page: 1, pageSize: 20, search: '', tagId: null });
 
   // 跨页选择：用 Set 记录所有已选 id（字符串），翻页不清空，搜索变更时清空
   const checkedSetRef = useRef(new Set<string>());
@@ -32,6 +35,7 @@ export function ItemsPage() {
 
   const params = new URLSearchParams({ page: String(query.page), page_size: String(query.pageSize) });
   if (query.search) params.set('search', query.search);
+  if (query.tagId !== null) params.set('tag_id', String(query.tagId));
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['items', query],
@@ -185,6 +189,17 @@ export function ItemsPage() {
                 setQuery((q) => ({ ...q, page: 1, search: v.trim() }));
               }}
             />
+            <Select
+              allowClear
+              placeholder="按标签筛选"
+              style={{ minWidth: 160 }}
+              value={query.tagId}
+              onChange={(v) => {
+                clearChecked();
+                setQuery((q) => ({ ...q, page: 1, tagId: v ?? null }));
+              }}
+              options={tags.map((t) => ({ label: t.name, value: t.id }))}
+            />
             <Button
               icon={<ReloadOutlined />}
               loading={isFetching}
@@ -232,8 +247,8 @@ export function ItemsPage() {
           loading={isLoading}
           dataSource={data?.items ?? []}
           locale={{
-            emptyText: query.search
-              ? '未找到匹配的商品名或标题，请尝试其他关键词。'
+            emptyText: query.search || query.tagId !== null
+              ? '没有匹配当前搜索/筛选条件的记录，请调整条件。'
               : '暂无抓取数据——队列执行后，抓到的原始数据会出现在这里。',
           }}
           columns={[

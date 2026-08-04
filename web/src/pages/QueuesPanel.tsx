@@ -9,17 +9,25 @@ import {
   Divider,
   Empty,
   InputNumber,
+  Modal,
   Progress,
+  Radio,
   Space,
   Table,
   Tag,
   Typography,
 } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiDelete, apiPost, fmtTime } from '@/lib/api';
+import { apiDelete, apiPost, apiPut, fmtTime } from '@/lib/api';
 import { useQueue } from '@/lib/queue';
 import { useTags } from '@/lib/queries';
-import type { PreviewResponse, QueueProgress, QueueStatus, Selector } from '@/types/api';
+import type {
+  PreviewResponse,
+  QueueProgress,
+  QueuePurgeOutcomeResponse,
+  QueueStatus,
+  Selector,
+} from '@/types/api';
 
 export const QUEUE_STATUS_TEXT: Record<QueueStatus, string> = {
   waiting: '排队中',
@@ -122,6 +130,50 @@ export function QueuesPanel() {
 
   const refreshQueues = () => queryClient.invalidateQueries({ queryKey: ['queues'] });
 
+  const renameQueue = async (id: number, name: string) => {
+    if (!name.trim()) return;
+    try {
+      await apiPut(`/api/queues/${id}/name`, { name });
+      refreshQueues();
+    } catch (e) {
+      message.error(`改名失败: ${(e as Error).message}`);
+    }
+  };
+
+  // ---------- 历史队列清理 ----------
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeMode, setPurgeMode] = useState<'before_days' | 'keep_latest'>('before_days');
+  const [purgeDays, setPurgeDays] = useState<number>(7);
+  const [purgeKeep, setPurgeKeep] = useState<number>(20);
+  const [purgePreview, setPurgePreview] = useState<QueuePurgeOutcomeResponse | null>(null);
+  const [purging, setPurging] = useState(false);
+
+  const purgePayload = (): { before_days: number } | { keep_latest: number } =>
+    purgeMode === 'before_days' ? { before_days: purgeDays } : { keep_latest: purgeKeep };
+
+  const doPurgePreview = async () => {
+    try {
+      setPurgePreview(await apiPost<QueuePurgeOutcomeResponse>('/api/queues/purge/preview', purgePayload()));
+    } catch (e) {
+      message.error(`预览失败: ${(e as Error).message}`);
+    }
+  };
+
+  const doPurge = async () => {
+    setPurging(true);
+    try {
+      const r = await apiPost<QueuePurgeOutcomeResponse>('/api/queues/purge', purgePayload());
+      message.success(`已清理 ${r.queues} 个历史队列（${r.entries} 条条目记录）`);
+      setPurgeOpen(false);
+      setPurgePreview(null);
+      refreshQueues();
+    } catch (e) {
+      message.error(`清理失败: ${(e as Error).message}`);
+    } finally {
+      setPurging(false);
+    }
+  };
+
   const queueOp = async (url: string) => {
     try {
       await apiPost(url);
@@ -197,13 +249,26 @@ export function QueuesPanel() {
 
   const queueColumns = (isHistory: boolean) => [
     {
-      title: 'ID',
-      dataIndex: 'id',
-      width: 70,
-      render: (id: number, q: QueueProgress) => (
-        <Space size={6}>
+      title: '队列',
+      dataIndex: 'name',
+      render: (name: string, q: QueueProgress) => (
+        <Space size={6} style={{ maxWidth: '100%' }}>
           {q.status === 'running' && <Badge status="processing" />}
-          <span className="num">#{id}</span>
+          <Typography.Text
+            strong={q.status === 'running'}
+            ellipsis={{ tooltip: name }}
+            style={{ maxWidth: 240 }}
+            editable={{
+              tooltip: '改名',
+              maxLength: 40,
+              onChange: (v) => renameQueue(q.id, v),
+            }}
+          >
+            {name || `队列 #${q.id}`}
+          </Typography.Text>
+          <Typography.Text type="secondary" className="num" style={{ fontSize: 12, flexShrink: 0 }}>
+            #{q.id}
+          </Typography.Text>
         </Space>
       ),
     },
@@ -271,6 +336,9 @@ export function QueuesPanel() {
   const history = queues.filter((q) => !ACTIVE_STATUSES.includes(q.status));
   const rqFinished = runningQueue ? runningQueue.done + runningQueue.failed + runningQueue.skipped : 0;
   const rqPct = runningQueue && runningQueue.total > 0 ? Math.round((rqFinished / runningQueue.total) * 100) : 0;
+  // 追加目标队列的展示名（自动生成的条件摘要或用户改过的名，老队列无名时回退序号）
+  const appendQueue = appendTarget !== null ? queues.find((q) => q.id === appendTarget) : undefined;
+  const appendLabel = appendQueue?.name || `队列 #${appendTarget}`;
 
   // 行式选择器：左侧条件说明，右侧可点选标签（CheckableTag），紧凑不撑列
   const toggleTag = (list: number[], setter: (v: number[]) => void) => (id: number, checked: boolean) =>
@@ -336,7 +404,7 @@ export function QueuesPanel() {
             showIcon
             message={
               <>
-                正在向队列 #{appendTarget} 追加条目{' '}
+                正在向「{appendLabel}」追加条目{' '}
                 <Button type="link" size="small" style={{ padding: 0 }} onClick={exitAppend}>
                   退出追加
                 </Button>
@@ -348,9 +416,11 @@ export function QueuesPanel() {
         {runningQueue && (
           <Card size="small" styles={{ body: { display: 'flex', flexDirection: 'column', gap: 8 } }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 }}>
-              <Space size={8}>
+              <Space size={8} style={{ minWidth: 0 }}>
                 <Badge status="processing" />
-                <Typography.Text strong>正在执行 · 队列 #{runningQueue.id}</Typography.Text>
+                <Typography.Text strong ellipsis={{ tooltip: runningQueue.name }} style={{ maxWidth: 320 }}>
+                  正在执行 · {runningQueue.name || `队列 #${runningQueue.id}`}
+                </Typography.Text>
               </Space>
               <Typography.Text type="secondary" className="num" style={{ fontSize: 12 }}>
                 间隔 {runningQueue.interval_secs}s · 剩余约{' '}
@@ -380,7 +450,7 @@ export function QueuesPanel() {
           items={[
             {
               key: 'form',
-              label: appendTarget !== null ? `向队列 #${appendTarget} 追加条目` : '新建队列',
+              label: appendTarget !== null ? `向「${appendLabel}」追加条目` : '新建队列',
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
                   <Typography.Text type="secondary" style={{ fontSize: 13 }}>
@@ -415,7 +485,7 @@ export function QueuesPanel() {
                     <Space>
                       <Button onClick={doPreview}>预览匹配商品</Button>
                       <Button type="primary" onClick={doEnqueue}>
-                        {appendTarget !== null ? `追加到队列 #${appendTarget}` : '创建队列'}
+                        {appendTarget !== null ? `追加到「${appendLabel}」` : '创建队列'}
                       </Button>
                     </Space>
                   </Space>
@@ -476,6 +546,19 @@ export function QueuesPanel() {
               {
                 key: 'history',
                 label: `历史队列（${history.length}）`,
+                extra: (
+                  <Button
+                    size="small"
+                    danger
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPurgePreview(null);
+                      setPurgeOpen(true);
+                    }}
+                  >
+                    清理历史
+                  </Button>
+                ),
                 children: (
                   <Table
                     rowKey="id"
@@ -489,6 +572,55 @@ export function QueuesPanel() {
             ]}
           />
         )}
+
+        <Modal
+          title="清理历史队列"
+          open={purgeOpen}
+          onCancel={() => setPurgeOpen(false)}
+          okText="确认清理"
+          okButtonProps={{ danger: true, loading: purging }}
+          cancelText="再想想"
+          onOk={doPurge}
+        >
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              只清理已完成 / 已取消的历史队列及其条目记录，不影响活跃队列和商品统计数据。
+            </Typography.Text>
+            <Radio.Group
+              value={purgeMode}
+              onChange={(e) => {
+                setPurgeMode(e.target.value);
+                setPurgePreview(null);
+              }}
+              options={[
+                { value: 'before_days', label: '清理 N 天前结束的队列（0 = 清空全部）' },
+                { value: 'keep_latest', label: '仅保留最近结束的 N 条' },
+              ]}
+            />
+            <Space>
+              <InputNumber
+                min={0}
+                value={purgeMode === 'before_days' ? purgeDays : purgeKeep}
+                addonAfter={purgeMode === 'before_days' ? '天' : '条'}
+                style={{ width: 140 }}
+                onChange={(v) => {
+                  const n = v ?? 0;
+                  if (purgeMode === 'before_days') setPurgeDays(n);
+                  else setPurgeKeep(n);
+                  setPurgePreview(null);
+                }}
+              />
+              <Button onClick={doPurgePreview}>预览</Button>
+            </Space>
+            {purgePreview && (
+              <Alert
+                type="warning"
+                showIcon
+                message={`将永久删除 ${purgePreview.queues} 个历史队列及其 ${purgePreview.entries} 条条目记录。`}
+              />
+            )}
+          </Space>
+        </Modal>
       </Space>
     </Card>
   );

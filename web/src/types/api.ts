@@ -68,6 +68,8 @@ export type { ItemBatchDeleteIdsRequest } from './generated/ItemBatchDeleteIdsRe
 export type { ItemBatchDeletePreviewResponse } from './generated/ItemBatchDeletePreviewResponse';
 export type { ItemBatchDeleteResponse } from './generated/ItemBatchDeleteResponse';
 export type { PreviewResponse } from './generated/PreviewResponse';
+export type { QueuePurgeOutcomeResponse } from './generated/QueuePurgeOutcomeResponse';
+export type { QueuePurgeRequest } from './generated/QueuePurgeRequest';
 export type { PriceTrendPoint } from './generated/PriceTrendPoint';
 export type { PriceTrendSeries } from './generated/PriceTrendSeries';
 export type { ProductBatchCreateResponse } from './generated/ProductBatchCreateResponse';

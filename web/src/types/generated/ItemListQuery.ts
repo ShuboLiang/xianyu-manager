@@ -7,4 +7,8 @@ export type ItemListQuery = { page: number | null, page_size: number | null,
 /**
  * 标题或商品名模糊搜索
  */
-search: string | null, };
+search: string | null, 
+/**
+ * 标签筛选：只看挂在该标签下的商品的记录
+ */
+tag_id: number | null, };

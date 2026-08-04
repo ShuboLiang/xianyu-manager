@@ -203,6 +203,8 @@ pub struct ProductResponse {
     pub remark: Option<String>,
     pub median_price: Option<f64>,
     pub avg_price: Option<f64>,
+    /// 常见价位（自适应档宽分档众数的档位下界；档宽按量级：<100→10，<1000→50，<10000→100，≥10000→500）
+    pub mode_price: Option<f64>,
     pub crawled_count: Option<u32>,
     #[ts(type = "number | null")]
     pub last_crawled_at: Option<u64>,
@@ -224,6 +226,7 @@ impl ProductResponse {
             remark: p.remark,
             median_price: p.median_price,
             avg_price: p.avg_price,
+            mode_price: p.mode_price,
             crawled_count: p.crawled_count,
             last_crawled_at: p.last_crawled_at,
             recycle_price: p.recycle_price,
@@ -301,6 +304,7 @@ pub struct QueueResponse {
     #[ts(type = "number")]
     pub id: i64,
     pub status: String,
+    pub name: String,
     pub interval_secs: u32,
     #[ts(type = "number")]
     pub created_at: u64,
@@ -319,6 +323,7 @@ impl From<QueueProgress> for QueueResponse {
         Self {
             id: p.queue.id,
             status: p.queue.status.as_str().to_string(),
+            name: p.queue.name,
             interval_secs: p.queue.interval_secs,
             created_at: p.queue.created_at,
             finished_at: p.queue.finished_at,
@@ -330,6 +335,35 @@ impl From<QueueProgress> for QueueResponse {
             skipped: p.skipped,
         }
     }
+}
+
+/// 队列改名请求
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct RenameQueueRequest {
+    pub name: String,
+}
+
+/// 历史队列清理请求：before_days 与 keep_latest 恰填一个（service 层校验）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct QueuePurgeRequest {
+    /// 清理 N 天前结束的队列（0 = 清空全部历史）
+    #[ts(type = "number | null")]
+    pub before_days: Option<u32>,
+    /// 仅保留最近结束的 N 条
+    #[ts(type = "number | null")]
+    pub keep_latest: Option<u64>,
+}
+
+/// 历史队列清理预览/结果：命中（或已删）的队列数与条目总数
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct QueuePurgeOutcomeResponse {
+    #[ts(type = "number")]
+    pub queues: u64,
+    #[ts(type = "number")]
+    pub entries: u64,
 }
 
 /// 入队/追加响应：队列 + 明细
@@ -584,6 +618,9 @@ pub struct ItemListQuery {
     pub page_size: Option<u64>,
     /// 标题或商品名模糊搜索
     pub search: Option<String>,
+    /// 标签筛选：只看挂在该标签下的商品的记录
+    #[ts(type = "number | null")]
+    pub tag_id: Option<i64>,
 }
 
 /// 商品列表查询参数：分页 + 服务端排序

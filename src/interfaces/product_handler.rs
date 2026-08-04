@@ -305,7 +305,7 @@ fn build_excel(
     let header_fmt = Format::new().set_bold().set_background_color(Color::RGB(0xD9E2F3));
     let date_fmt = Format::new().set_num_format("yyyy-mm-dd hh:mm:ss");
     let headers = [
-        "ID", "商品名", "标签", "备注", "中位数价格", "均价", "爬取数量",
+        "ID", "商品名", "标签", "备注", "中位数价格", "均价", "常见价位", "爬取数量",
         "最后爬取时间", "回收价格", "创建时间", "更新时间",
     ];
     for (col, h) in headers.iter().enumerate() {
@@ -323,13 +323,18 @@ fn build_excel(
         sheet.write_string(r, 3, p.remark.as_deref().unwrap_or(""))?;
         write_opt_number(&mut sheet, r, 4, p.median_price)?;
         write_opt_number(&mut sheet, r, 5, p.avg_price)?;
-        if let Some(v) = p.crawled_count {
-            sheet.write_number(r, 6, v as f64)?;
+        // 常见价位导出为区间文本（如 90-100 / 1200-1300），档宽按量级自适应，与前端展示一致
+        if let Some(v) = p.mode_price {
+            let w = crate::domain::product::mode_bucket_width(v);
+            sheet.write_string(r, 6, &format!("{}-{}", v as i64, v as i64 + w))?;
         }
-        write_opt_datetime(&mut sheet, r, 7, p.last_crawled_at, &date_fmt)?;
-        write_opt_number(&mut sheet, r, 8, p.recycle_price)?;
-        write_opt_datetime(&mut sheet, r, 9, Some(p.created_at), &date_fmt)?;
-        write_opt_datetime(&mut sheet, r, 10, Some(p.updated_at), &date_fmt)?;
+        if let Some(v) = p.crawled_count {
+            sheet.write_number(r, 7, v as f64)?;
+        }
+        write_opt_datetime(&mut sheet, r, 8, p.last_crawled_at, &date_fmt)?;
+        write_opt_number(&mut sheet, r, 9, p.recycle_price)?;
+        write_opt_datetime(&mut sheet, r, 10, Some(p.created_at), &date_fmt)?;
+        write_opt_datetime(&mut sheet, r, 11, Some(p.updated_at), &date_fmt)?;
     }
 
     for col in 0..headers.len() as u16 {

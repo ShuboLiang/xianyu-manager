@@ -77,6 +77,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             remark          TEXT,
             median_price    REAL,
             avg_price       REAL,
+            mode_price      REAL,
             crawled_count   INTEGER,
             last_crawled_at INTEGER,
             recycle_price   REAL,
@@ -87,6 +88,19 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
     .execute(&*pool)
     .await
     .map_err(to_infra)?;
+
+    // 老库 products 表可能缺 mode_price 列，手动迁移（同 items.product_id 的做法）
+    let cols = sqlx::query("PRAGMA table_info(products)")
+        .fetch_all(&*pool)
+        .await
+        .map_err(to_infra)?;
+    if !cols.iter().any(|r| r.get::<String, _>("name") == "mode_price") {
+        sqlx::query("ALTER TABLE products ADD COLUMN mode_price REAL")
+            .execute(&*pool)
+            .await
+            .map_err(to_infra)?;
+        tracing::info!("products 表迁移：补充 mode_price 列");
+    }
 
     // 商品 ↔ 标签 多对多关联表
     sqlx::query(
@@ -106,6 +120,8 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             status        TEXT NOT NULL,
             interval_secs INTEGER NOT NULL,
+            name          TEXT NOT NULL DEFAULT '',
+            name_custom   INTEGER NOT NULL DEFAULT 0,
             created_at    INTEGER NOT NULL,
             finished_at   INTEGER
         )",
@@ -113,6 +129,27 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
     .execute(&*pool)
     .await
     .map_err(to_infra)?;
+
+    // 老库 crawl_queues 表可能缺 name/name_custom 列，手动迁移（同 items.product_id 的做法）
+    let cols = sqlx::query("PRAGMA table_info(crawl_queues)")
+        .fetch_all(&*pool)
+        .await
+        .map_err(to_infra)?;
+    let col_names: Vec<String> = cols.iter().map(|r| r.get("name")).collect();
+    if !col_names.iter().any(|c| c == "name") {
+        sqlx::query("ALTER TABLE crawl_queues ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+            .execute(&*pool)
+            .await
+            .map_err(to_infra)?;
+        tracing::info!("crawl_queues 表迁移：补充 name 列");
+    }
+    if !col_names.iter().any(|c| c == "name_custom") {
+        sqlx::query("ALTER TABLE crawl_queues ADD COLUMN name_custom INTEGER NOT NULL DEFAULT 0")
+            .execute(&*pool)
+            .await
+            .map_err(to_infra)?;
+        tracing::info!("crawl_queues 表迁移：补充 name_custom 列");
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS crawl_entries (
@@ -353,6 +390,7 @@ impl ProductRepository for SqliteProductRepository {
             remark: product.remark.clone(),
             median_price: None,
             avg_price: None,
+            mode_price: None,
             crawled_count: None,
             last_crawled_at: None,
             recycle_price: None,
@@ -491,7 +529,7 @@ impl ProductRepository for SqliteProductRepository {
         let mut tx = self.pool.begin().await.map_err(to_infra)?;
         sqlx::query(
             "UPDATE products SET name = ?, remark = ?,
-                median_price = ?, avg_price = ?, crawled_count = ?,
+                median_price = ?, avg_price = ?, mode_price = ?, crawled_count = ?,
                 last_crawled_at = ?, recycle_price = ?, updated_at = ?
              WHERE id = ?",
         )
@@ -499,6 +537,7 @@ impl ProductRepository for SqliteProductRepository {
         .bind(&product.remark)
         .bind(product.median_price)
         .bind(product.avg_price)
+        .bind(product.mode_price)
         .bind(product.crawled_count.map(|c| c as i64))
         .bind(product.last_crawled_at.map(|t| t as i64))
         .bind(product.recycle_price)
@@ -593,6 +632,7 @@ fn row_to_product(row: &SqliteRow) -> Result<Product, DomainError> {
         remark: row.get("remark"),
         median_price: row.get("median_price"),
         avg_price: row.get("avg_price"),
+        mode_price: row.get("mode_price"),
         crawled_count: row.get::<Option<i64>, _>("crawled_count").map(|c| c as u32),
         last_crawled_at: row.get::<Option<i64>, _>("last_crawled_at").map(|t| t as u64),
         recycle_price: row.get("recycle_price"),
@@ -619,6 +659,7 @@ fn product_sort_column_sql(col: ProductSortColumn) -> &'static str {
     match col {
         ProductSortColumn::MedianPrice => "p.median_price",
         ProductSortColumn::AvgPrice => "p.avg_price",
+        ProductSortColumn::ModePrice => "p.mode_price",
         ProductSortColumn::CrawledCount => "p.crawled_count",
         ProductSortColumn::LastCrawledAt => "p.last_crawled_at",
         ProductSortColumn::RecyclePrice => "p.recycle_price",
@@ -641,11 +682,13 @@ impl SqliteQueueRepository {
 impl QueueRepository for SqliteQueueRepository {
     async fn create_queue(&self, queue: &CrawlQueue) -> Result<CrawlQueue, DomainError> {
         let result = sqlx::query(
-            "INSERT INTO crawl_queues (status, interval_secs, created_at, finished_at)
-             VALUES (?, ?, ?, NULL)",
+            "INSERT INTO crawl_queues (status, interval_secs, name, name_custom, created_at, finished_at)
+             VALUES (?, ?, ?, ?, ?, NULL)",
         )
         .bind(queue.status.as_str())
         .bind(queue.interval_secs as i64)
+        .bind(&queue.name)
+        .bind(queue.name_custom)
         .bind(queue.created_at as i64)
         .execute(&self.pool)
         .await
@@ -689,11 +732,13 @@ impl QueueRepository for SqliteQueueRepository {
 
     async fn update_queue(&self, queue: &CrawlQueue) -> Result<(), DomainError> {
         sqlx::query(
-            "UPDATE crawl_queues SET status = ?, interval_secs = ?, finished_at = ?
+            "UPDATE crawl_queues SET status = ?, interval_secs = ?, name = ?, name_custom = ?, finished_at = ?
              WHERE id = ?",
         )
         .bind(queue.status.as_str())
         .bind(queue.interval_secs as i64)
+        .bind(&queue.name)
+        .bind(queue.name_custom)
         .bind(queue.finished_at.map(|t| t as i64))
         .bind(queue.id)
         .execute(&self.pool)
@@ -820,6 +865,8 @@ fn row_to_queue(row: &SqliteRow) -> Result<CrawlQueue, DomainError> {
         id: row.get("id"),
         status: QueueStatus::from_str(row.get::<String, _>("status").as_str())?,
         interval_secs: row.get::<i64, _>("interval_secs") as u32,
+        name: row.get("name"),
+        name_custom: row.get::<i64, _>("name_custom") != 0,
         created_at: row.get::<i64, _>("created_at") as u64,
         finished_at: row.get::<Option<i64>, _>("finished_at").map(|t| t as u64),
     })
@@ -1178,16 +1225,33 @@ impl ItemRepository for SqliteItemRepository {
         offset: u64,
         limit: u64,
         search: Option<&str>,
+        tag_id: Option<i64>,
     ) -> Result<Page<Item>, DomainError> {
-        // 搜索词走 bind 参数（防注入/通配符错乱）：标题或所属商品名模糊匹配
+        // 搜索词走 bind 参数（防注入/通配符错乱）：标题或所属商品名模糊匹配；
+        // 标签筛选 = 记录所属商品挂在该标签下（product_id 为 NULL 的记录不归属任何标签，永不命中）
         let escaped = search.map(like_escape);
-        let (join_clause, where_clause) = if escaped.is_some() {
-            (
-                "LEFT JOIN products p ON i.product_id = p.id",
-                "WHERE i.title LIKE '%' || ? || '%' ESCAPE '\\' OR p.name LIKE '%' || ? || '%' ESCAPE '\\'",
-            )
+        let join_clause = if escaped.is_some() {
+            "LEFT JOIN products p ON i.product_id = p.id"
         } else {
-            ("", "")
+            ""
+        };
+        let mut conditions: Vec<String> = Vec::new();
+        if escaped.is_some() {
+            conditions.push(
+                "(i.title LIKE '%' || ? || '%' ESCAPE '\\' OR p.name LIKE '%' || ? || '%' ESCAPE '\\')"
+                    .to_string(),
+            );
+        }
+        if tag_id.is_some() {
+            conditions.push(
+                "EXISTS (SELECT 1 FROM product_tags pt WHERE pt.product_id = i.product_id AND pt.tag_id = ?)"
+                    .to_string(),
+            );
+        }
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
         };
 
         let list_sql = format!(
@@ -1196,6 +1260,9 @@ impl ItemRepository for SqliteItemRepository {
         let mut list_q = sqlx::query(&list_sql);
         if let Some(e) = &escaped {
             list_q = list_q.bind(e.clone()).bind(e.clone());
+        }
+        if let Some(tid) = tag_id {
+            list_q = list_q.bind(tid);
         }
         let rows = list_q
             .bind(limit as i64)
@@ -1210,6 +1277,9 @@ impl ItemRepository for SqliteItemRepository {
         let mut count_q = sqlx::query(&count_sql);
         if let Some(e) = &escaped {
             count_q = count_q.bind(e.clone()).bind(e.clone());
+        }
+        if let Some(tid) = tag_id {
+            count_q = count_q.bind(tid);
         }
         let count_row = count_q
             .fetch_one(&self.pool)
@@ -1411,14 +1481,14 @@ mod item_repo_tests {
         // 同 id 再抓：覆盖而不是新增
         repo.save_all(&[sample("a", 150.0, now)]).await.unwrap();
 
-        let page = repo.list_paginated(0, 10, None).await.unwrap();
+        let page = repo.list_paginated(0, 10, None, None).await.unwrap();
         assert_eq!(page.total, 2);
         assert_eq!(page.items.len(), 2);
         // 按抓取时间倒序：a（刚刷新）在最前
         assert_eq!(page.items[0].id, "a");
         assert_eq!(page.items[0].price, 150.0);
 
-        let page = repo.list_paginated(1, 1, None).await.unwrap();
+        let page = repo.list_paginated(1, 1, None, None).await.unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, "b");
 
@@ -1470,23 +1540,70 @@ mod item_repo_tests {
         repo.save_all(&[sample("plain", 50.0, now), special]).await.unwrap();
 
         // 单引号不破坏 SQL，且能按字面命中
-        let page = repo.list_paginated(0, 10, Some("Men's")).await.unwrap();
+        let page = repo.list_paginated(0, 10, Some("Men's"), None).await.unwrap();
         assert_eq!(page.total, 1);
         assert_eq!(page.items[0].id, "sp");
 
         // % 不再作为通配符：只命中标题里真的含 "100%" 的记录
-        let page = repo.list_paginated(0, 10, Some("100%")).await.unwrap();
+        let page = repo.list_paginated(0, 10, Some("100%"), None).await.unwrap();
         assert_eq!(page.total, 1);
         assert_eq!(page.items[0].id, "sp");
 
         // 普通关键词仍能模糊命中（"商品 plain" 的标题含「商品」）
-        let page = repo.list_paginated(0, 10, Some("商品")).await.unwrap();
+        let page = repo.list_paginated(0, 10, Some("商品"), None).await.unwrap();
         assert_eq!(page.total, 1);
         assert_eq!(page.items[0].id, "plain");
 
         // 批删与列表同一 WHERE 语义：通配符按字面处理，不会误删
         assert_eq!(repo.delete_matching(Some("100%")).await.unwrap(), 1);
-        assert_eq!(repo.list_paginated(0, 10, None).await.unwrap().total, 1);
+        assert_eq!(repo.list_paginated(0, 10, None, None).await.unwrap().total, 1);
+    }
+
+    #[tokio::test]
+    async fn tag_filter_matches_only_products_under_tag() {
+        let pool = connect(":memory:").await.unwrap();
+        let repo = SqliteItemRepository::new(pool.clone());
+        let now = now_unix();
+
+        // 两个商品：商品 1 挂标签 1，商品 2 无标签
+        for (pid, name) in [(1, "显卡 A"), (2, "主板 B")] {
+            sqlx::query("INSERT INTO products (id, name, created_at, updated_at) VALUES (?, ?, 0, 0)")
+                .bind(pid)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO tags (id, name, created_at, updated_at) VALUES (1, '显卡', 0, 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO product_tags (product_id, tag_id) VALUES (1, 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut tagged = sample("t1", 100.0, now);
+        tagged.product_id = Some(1);
+        let mut untagged = sample("u1", 200.0, now);
+        untagged.product_id = Some(2);
+        let detached = sample("d1", 300.0, now); // product_id 为 NULL（商品已删）
+        repo.save_all(&[tagged, untagged, detached]).await.unwrap();
+
+        // 按标签筛选：只命中挂在该标签下的商品的记录
+        let page = repo.list_paginated(0, 10, None, Some(1)).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, "t1");
+
+        // 标签筛选与搜索叠加
+        let page = repo
+            .list_paginated(0, 10, Some("显卡"), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+
+        // 不存在的标签：零命中
+        assert_eq!(repo.list_paginated(0, 10, None, Some(999)).await.unwrap().total, 0);
     }
 
     #[test]

@@ -106,11 +106,15 @@ export function AppShell() {
   const runningQueue = queues.find((q) => q.status === 'running');
   const waitingCount = queues.filter((q) => q.status === 'waiting').length;
   const queueIndicator = runningQueue ? (
-    <Button type="text" size="small" onClick={() => navigate('/')}>
+    <Button type="text" size="small" onClick={() => navigate('/')} style={{ maxWidth: 320, minWidth: 0 }}>
       <Badge status="processing" />
-      <span className="num">
-        队列 #{runningQueue.id} 执行中 {runningQueue.done + runningQueue.failed + runningQueue.skipped}/
-        {runningQueue.total}
+      <span
+        className="num"
+        style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        title={runningQueue.name}
+      >
+        {runningQueue.name || `队列 #${runningQueue.id}`} 执行中{' '}
+        {runningQueue.done + runningQueue.failed + runningQueue.skipped}/{runningQueue.total}
       </span>
     </Button>
   ) : waitingCount > 0 ? (

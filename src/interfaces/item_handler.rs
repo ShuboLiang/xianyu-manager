@@ -16,13 +16,13 @@ pub(crate) fn normalize_page(page: Option<u64>, page_size: Option<u64>) -> (u64,
     )
 }
 
-/// GET /api/items?page=1&page_size=20&search=关键词：已抓取原始数据，按抓取时间倒序分页
+/// GET /api/items?page=1&page_size=20&search=关键词&tag_id=1：已抓取原始数据，按抓取时间倒序分页
 pub async fn list_items(
     State(state): State<AppState>,
     Query(q): Query<ItemListQuery>,
 ) -> Json<ApiResponse<PageResponse<ItemResponse>>> {
     let (page, page_size) = normalize_page(q.page, q.page_size);
-    match state.item_service.list_paginated(page, page_size, q.search).await {
+    match state.item_service.list_paginated(page, page_size, q.search, q.tag_id).await {
         Ok(p) => {
             let product_ids: HashSet<i64> = p
                 .items
