@@ -970,27 +970,104 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
         })
     }
 
-    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<AiToolCall>, DomainError> {
-        let rows = sqlx::query(
-            "SELECT * FROM ai_tool_calls ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-        )
-        .bind(limit as i64)
-        .bind(offset as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(to_infra)?;
+    async fn list_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+        tool_name: Option<&str>,
+        failed_only: Option<bool>,
+    ) -> Result<Page<AiToolCall>, DomainError> {
+        let where_clause = ai_tool_call_where(tool_name, failed_only);
+        let list_sql = format!(
+            "SELECT * FROM ai_tool_calls{where_clause} ORDER BY created_at DESC, id DESC LIMIT {limit} OFFSET {offset}"
+        );
+        let rows = sqlx::query(&list_sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
         let items = rows
             .iter()
             .map(row_to_ai_tool_call)
             .collect::<Result<Vec<_>, _>>()?;
 
-        let count_row = sqlx::query("SELECT COUNT(*) AS c FROM ai_tool_calls")
+        let count_sql = format!("SELECT COUNT(*) AS c FROM ai_tool_calls{where_clause}");
+        let count_row = sqlx::query(&count_sql)
             .fetch_one(&self.pool)
             .await
             .map_err(to_infra)?;
         let total = count_row.get::<i64, _>("c") as u64;
 
         Ok(Page { items, total })
+    }
+
+    async fn list_tool_names(&self) -> Result<Vec<String>, DomainError> {
+        let rows = sqlx::query("SELECT DISTINCT tool_name FROM ai_tool_calls ORDER BY tool_name ASC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("tool_name")).collect())
+    }
+
+    async fn purge_preview(
+        &self,
+        before_ts: Option<u64>,
+        keep_latest: Option<u64>,
+    ) -> Result<u64, DomainError> {
+        let sql = format!(
+            "SELECT COUNT(*) AS c FROM ai_tool_calls{}",
+            purge_where(before_ts, keep_latest)
+        );
+        let row = sqlx::query(&sql)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(row.get::<i64, _>("c") as u64)
+    }
+
+    async fn purge(&self, before_ts: Option<u64>, keep_latest: Option<u64>) -> Result<u64, DomainError> {
+        let sql = format!(
+            "DELETE FROM ai_tool_calls{}",
+            purge_where(before_ts, keep_latest)
+        );
+        let result = sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(result.rows_affected())
+    }
+}
+
+/// 列表筛选的 WHERE 子句。tool_name 走 LIKE 转义之外的精确匹配——工具名来自
+/// 程序内部常量而非自由输入，直接转义单引号拼入（避免多分支动态 bind 的复杂度）。
+fn ai_tool_call_where(tool_name: Option<&str>, failed_only: Option<bool>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(name) = tool_name {
+        parts.push(format!("tool_name = '{}'", name.replace('\'', "''")));
+    }
+    if let Some(failed) = failed_only {
+        parts.push(if failed {
+            "error IS NOT NULL".to_string()
+        } else {
+            "error IS NULL".to_string()
+        });
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", parts.join(" AND "))
+    }
+}
+
+/// 清理条件的 WHERE 子句：before_ts 与 keep_latest 恰有一个生效（service 层已校验）。
+fn purge_where(before_ts: Option<u64>, keep_latest: Option<u64>) -> String {
+    if let Some(ts) = before_ts {
+        return format!(" WHERE created_at < {ts}");
+    }
+    match keep_latest {
+        Some(n) => format!(
+            " WHERE id NOT IN (SELECT id FROM ai_tool_calls ORDER BY created_at DESC, id DESC LIMIT {n})"
+        ),
+        None => String::new(),
     }
 }
 

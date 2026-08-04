@@ -115,6 +115,12 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
             get(ai_handler::get_crawl_prompt).put(ai_handler::update_crawl_prompt),
         )
         .route("/ai/tool-calls", get(ai_handler::list_tool_calls))
+        .route("/ai/tool-calls/names", get(ai_handler::list_tool_call_names))
+        .route(
+            "/ai/tool-calls/purge/preview",
+            post(ai_handler::preview_purge_tool_calls),
+        )
+        .route("/ai/tool-calls/purge", post(ai_handler::purge_tool_calls))
         .route(
             "/ai/providers",
             get(ai_handler::list_providers).post(ai_handler::create_provider),

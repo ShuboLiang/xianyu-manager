@@ -398,7 +398,7 @@ mod tests {
         let res = execute_tool(calls.clone(), &fail, serde_json::json!({})).await;
         assert!(res.is_err());
 
-        let logs = calls.list_paginated(0, 10).await.unwrap().items;
+        let logs = calls.list_paginated(0, 10, None, None).await.unwrap().items;
         assert_eq!(logs.len(), 2);
 
         let success_log = logs.iter().find(|l| l.tool_name == "echo").unwrap();

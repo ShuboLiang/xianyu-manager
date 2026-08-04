@@ -59,6 +59,9 @@ export type QueueProgress = Omit<QueueResponse, 'status'> & { status: QueueStatu
 // ---------- 原样 re-export（同名类型） ----------
 
 export type { BatchSkippedItem } from './generated/BatchSkippedItem';
+export type { AiToolCallPurgePreviewResponse } from './generated/AiToolCallPurgePreviewResponse';
+export type { AiToolCallPurgeRequest } from './generated/AiToolCallPurgeRequest';
+export type { AiToolCallPurgeResponse } from './generated/AiToolCallPurgeResponse';
 export type { ClassifyProductsResponse } from './generated/ClassifyProductsResponse';
 export type { EnqueueResponse } from './generated/EnqueueResponse';
 export type { ItemBatchDeletePreviewResponse } from './generated/ItemBatchDeletePreviewResponse';

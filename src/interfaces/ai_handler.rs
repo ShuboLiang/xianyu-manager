@@ -4,12 +4,14 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 
 use crate::application::ai_provider_service::AiProviderPatch;
+use crate::application::ai_tool_call_service::PurgeCriteria;
 
 use super::dto::{
     AiProviderCreateRequest, AiProviderResponse, AiProviderUpdateRequest, AiStatusResponse,
-    AiToolCallResponse, ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse,
-    ClassifyTaskResponse, CrawlPromptRequest, CrawlPromptResponse, PageQuery, PageResponse,
-    TestConnectionResponse,
+    AiToolCallListQuery, AiToolCallPurgePreviewResponse, AiToolCallPurgeRequest,
+    AiToolCallPurgeResponse, AiToolCallResponse, ApiResponse, ClassifyProductsRequest,
+    ClassifyProductsResponse, ClassifyTaskResponse, CrawlPromptRequest, CrawlPromptResponse,
+    PageResponse, TestConnectionResponse,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -146,16 +148,60 @@ pub async fn update_crawl_prompt(
 /// GET /api/ai/tool-calls?page=1&page_size=20：工具调用审计，按时间倒序分页
 pub async fn list_tool_calls(
     State(state): State<AppState>,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<AiToolCallListQuery>,
 ) -> Json<ApiResponse<PageResponse<AiToolCallResponse>>> {
     let (page, page_size) = normalize_page(q.page, q.page_size);
-    match state.ai_tool_call_service.list_paginated(page, page_size).await {
+    match state
+        .ai_tool_call_service
+        .list_paginated(page, page_size, q.tool_name.as_deref(), q.failed)
+        .await
+    {
         Ok(p) => Json(ApiResponse::ok(PageResponse::new(
             p.items.into_iter().map(Into::into).collect(),
             p.total,
             page,
             page_size,
         ))),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/ai/tool-calls/names：库中出现过的工具名（筛选下拉用）
+pub async fn list_tool_call_names(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<String>>> {
+    match state.ai_tool_call_service.list_tool_names().await {
+        Ok(names) => Json(ApiResponse::ok(names)),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/ai/tool-calls/purge/preview：预览将清理的记录数
+pub async fn preview_purge_tool_calls(
+    State(state): State<AppState>,
+    Json(req): Json<AiToolCallPurgeRequest>,
+) -> Json<ApiResponse<AiToolCallPurgePreviewResponse>> {
+    let result = match PurgeCriteria::new(req.before_days, req.keep_latest) {
+        Ok(criteria) => state.ai_tool_call_service.purge_preview(criteria).await,
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(matched) => Json(ApiResponse::ok(AiToolCallPurgePreviewResponse { matched })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/ai/tool-calls/purge：执行清理（保留期管理，非单条删除）
+pub async fn purge_tool_calls(
+    State(state): State<AppState>,
+    Json(req): Json<AiToolCallPurgeRequest>,
+) -> Json<ApiResponse<AiToolCallPurgeResponse>> {
+    let result = match PurgeCriteria::new(req.before_days, req.keep_latest) {
+        Ok(criteria) => state.ai_tool_call_service.purge(criteria).await,
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(deleted) => Json(ApiResponse::ok(AiToolCallPurgeResponse { deleted })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

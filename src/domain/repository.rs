@@ -157,8 +157,25 @@ pub trait AiProviderRepository: Send + Sync {
 pub trait AiToolCallRepository: Send + Sync {
     /// 落一条工具调用审计记录并返回带 id 的完整实体
     async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError>;
-    /// 按时间倒序分页
-    async fn list_paginated(&self, offset: u64, limit: u64) -> Result<Page<AiToolCall>, DomainError>;
+    /// 按时间倒序分页；tool_name 精确匹配筛选，failed_only: Some(true)=只看失败 / Some(false)=只看成功 / None=全部
+    async fn list_paginated(
+        &self,
+        offset: u64,
+        limit: u64,
+        tool_name: Option<&str>,
+        failed_only: Option<bool>,
+    ) -> Result<Page<AiToolCall>, DomainError>;
+    /// 库中出现过的工具名（去重、按名称排序，前端筛选下拉用）
+    async fn list_tool_names(&self) -> Result<Vec<String>, DomainError>;
+    /// 命中清理条件的记录数；before_ts=清理该时间戳之前的记录，keep_latest=仅保留最新 N 条
+    /// 二者由调用方保证恰有一个为 Some
+    async fn purge_preview(
+        &self,
+        before_ts: Option<u64>,
+        keep_latest: Option<u64>,
+    ) -> Result<u64, DomainError>;
+    /// 执行清理（语义同 purge_preview），返回实际删除条数
+    async fn purge(&self, before_ts: Option<u64>, keep_latest: Option<u64>) -> Result<u64, DomainError>;
 }
 
 #[async_trait]

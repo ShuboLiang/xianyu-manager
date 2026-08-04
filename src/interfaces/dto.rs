@@ -486,6 +486,49 @@ impl From<AiToolCall> for AiToolCallResponse {
     }
 }
 
+/// AI 工具调用记录列表查询参数：分页 + 工具名/成败筛选
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct AiToolCallListQuery {
+    #[ts(type = "number | null")]
+    pub page: Option<u64>,
+    #[ts(type = "number | null")]
+    pub page_size: Option<u64>,
+    /// 工具名精确匹配，缺省 = 全部
+    pub tool_name: Option<String>,
+    /// true = 只看失败，false = 只看成功，缺省 = 全部
+    #[ts(type = "boolean | null")]
+    pub failed: Option<bool>,
+}
+
+/// AI 工具调用记录清理请求：before_days 与 keep_latest 恰填一个（service 层校验）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct AiToolCallPurgeRequest {
+    /// 删除 N 天前的记录（0 = 清空全部）
+    #[ts(type = "number | null")]
+    pub before_days: Option<u32>,
+    /// 仅保留最新 N 条
+    #[ts(type = "number | null")]
+    pub keep_latest: Option<u64>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AiToolCallPurgePreviewResponse {
+    /// 命中清理条件的记录数
+    #[ts(type = "number")]
+    pub matched: u64,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AiToolCallPurgeResponse {
+    /// 实际删除条数
+    #[ts(type = "number")]
+    pub deleted: u64,
+}
+
 /// 统一 API 响应结构（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T: Serialize> {

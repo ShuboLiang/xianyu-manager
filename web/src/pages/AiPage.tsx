@@ -8,6 +8,8 @@ import {
   Form,
   Input,
   InputNumber,
+  Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -16,13 +18,16 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/PageHeader';
 import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '@/lib/api';
 import type {
   AiProvider,
   AiStatus,
   AiToolCall,
+  AiToolCallPurgePreviewResponse,
+  AiToolCallPurgeRequest,
+  AiToolCallPurgeResponse,
   CrawlPrompt,
   PageResponse,
   TestConnectionResponse,
@@ -216,14 +221,88 @@ export function AiPage() {
   };
 
   // ---------- 工具调用记录 ----------
-  const [callsQuery, setCallsQuery] = useState({ page: 1, pageSize: 20 });
+  const [callsQuery, setCallsQuery] = useState<{
+    page: number;
+    pageSize: number;
+    toolName: string | null;
+    failed: boolean | null;
+  }>({ page: 1, pageSize: 20, toolName: null, failed: null });
+
+  // 筛选下拉的工具名选项（库中实际出现过的工具）
+  const { data: toolNames } = useQuery({
+    queryKey: ['aiCallNames'],
+    queryFn: () => apiGet<string[]>('/api/ai/tool-calls/names'),
+  });
+
   const { data: toolCalls } = useQuery({
     queryKey: ['aiCalls', callsQuery],
-    queryFn: () =>
-      apiGet<PageResponse<AiToolCall>>(
-        `/api/ai/tool-calls?page=${callsQuery.page}&page_size=${callsQuery.pageSize}`,
-      ),
+    placeholderData: keepPreviousData,
+    queryFn: () => {
+      const params = new URLSearchParams({
+        page: String(callsQuery.page),
+        page_size: String(callsQuery.pageSize),
+      });
+      if (callsQuery.toolName) params.set('tool_name', callsQuery.toolName);
+      if (callsQuery.failed !== null) params.set('failed', String(callsQuery.failed));
+      return apiGet<PageResponse<AiToolCall>>(`/api/ai/tool-calls?${params}`);
+    },
   });
+
+  // ---------- 清理历史（保留期管理）----------
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeMode, setPurgeMode] = useState<'before_days' | 'keep_latest'>('before_days');
+  const [purgeDays, setPurgeDays] = useState(30);
+  const [purgeKeep, setPurgeKeep] = useState(1000);
+
+  const purgeRequest = (): AiToolCallPurgeRequest =>
+    purgeMode === 'before_days'
+      ? { before_days: purgeDays, keep_latest: null }
+      : { before_days: null, keep_latest: purgeKeep };
+
+  const refreshCalls = () => {
+    queryClient.invalidateQueries({ queryKey: ['aiCalls'] });
+    queryClient.invalidateQueries({ queryKey: ['aiCallNames'] });
+  };
+
+  const submitPurge = async () => {
+    let preview: AiToolCallPurgePreviewResponse;
+    try {
+      preview = await apiPost<AiToolCallPurgePreviewResponse>(
+        '/api/ai/tool-calls/purge/preview',
+        purgeRequest(),
+      );
+    } catch (e) {
+      message.error(`预览失败: ${(e as Error).message}`);
+      return;
+    }
+    if (preview.matched === 0) {
+      message.info('没有命中清理条件的记录');
+      return;
+    }
+    modal.confirm({
+      title: '清理工具调用记录？',
+      content:
+        purgeMode === 'before_days'
+          ? `将删除 ${purgeDays} 天前的 ${preview.matched} 条调用记录，删除后不可恢复。`
+          : `将仅保留最新 ${purgeKeep} 条，删除其余 ${preview.matched} 条调用记录，删除后不可恢复。`,
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res = await apiPost<AiToolCallPurgeResponse>(
+            '/api/ai/tool-calls/purge',
+            purgeRequest(),
+          );
+          message.success(`已清理 ${res.deleted} 条调用记录`);
+          setPurgeOpen(false);
+          refreshCalls();
+        } catch (e) {
+          message.error(`清理失败: ${(e as Error).message}`);
+        }
+      },
+    });
+  };
 
   return (
     <div>
@@ -424,7 +503,36 @@ export function AiPage() {
               key: 'calls',
               label: `调用记录（${toolCalls?.total ?? 0}）`,
               children: (
-                <Table<AiToolCall>
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {/* 筛选栏：工具名 / 成败 / 清理历史 */}
+                  <Space wrap>
+                    <Select
+                      allowClear
+                      placeholder="全部工具"
+                      style={{ width: 190 }}
+                      value={callsQuery.toolName}
+                      options={(toolNames ?? []).map((n) => ({ value: n, label: n }))}
+                      onChange={(v) =>
+                        setCallsQuery((q) => ({ ...q, page: 1, toolName: v ?? null }))
+                      }
+                    />
+                    <Select
+                      style={{ width: 120 }}
+                      value={callsQuery.failed}
+                      options={[
+                        { value: null, label: '全部结果' },
+                        { value: false, label: '成功' },
+                        { value: true, label: '失败' },
+                      ]}
+                      onChange={(v) =>
+                        setCallsQuery((q) => ({ ...q, page: 1, failed: v }))
+                      }
+                    />
+                    <Button danger onClick={() => setPurgeOpen(true)}>
+                      清理历史
+                    </Button>
+                  </Space>
+                  <Table<AiToolCall>
                   rowKey="id"
                   size="small"
                   dataSource={toolCalls?.items ?? []}
@@ -521,7 +629,11 @@ export function AiPage() {
                     },
                   ]}
                   onChange={(pagination) =>
-                    setCallsQuery({ page: pagination.current ?? 1, pageSize: pagination.pageSize ?? 20 })
+                    setCallsQuery((q) => ({
+                      ...q,
+                      page: pagination.current ?? 1,
+                      pageSize: pagination.pageSize ?? 20,
+                    }))
                   }
                   pagination={{
                     current: callsQuery.page,
@@ -531,11 +643,50 @@ export function AiPage() {
                     showTotal: (t) => `共 ${t} 条`,
                   }}
                 />
+                </Space>
               ),
             },
           ]}
         />
       </Card>
+
+      {/* 清理历史：选择保留策略 → 预览命中数 → 确认后执行 */}
+      <Modal
+        title="清理工具调用记录"
+        open={purgeOpen}
+        onOk={submitPurge}
+        onCancel={() => setPurgeOpen(false)}
+        okText="预览并清理"
+        cancelText="取消"
+        width={420}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%', marginTop: 8 }}>
+          <Radio.Group
+            value={purgeMode}
+            onChange={(e) => setPurgeMode(e.target.value)}
+            options={[
+              { value: 'before_days', label: '删除 N 天前的记录' },
+              { value: 'keep_latest', label: '仅保留最新 N 条' },
+            ]}
+          />
+          {purgeMode === 'before_days' ? (
+            <Space>
+              <span>删除</span>
+              <InputNumber min={0} max={3650} value={purgeDays} onChange={(v) => setPurgeDays(v ?? 30)} />
+              <span>天前的全部记录（0 = 清空全部）</span>
+            </Space>
+          ) : (
+            <Space>
+              <span>仅保留最新</span>
+              <InputNumber min={0} max={1000000} value={purgeKeep} onChange={(v) => setPurgeKeep(v ?? 1000)} />
+              <span>条，删除其余记录</span>
+            </Space>
+          )}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            审计记录只增不改，清理是保留期管理；删除后不可恢复。
+          </Typography.Text>
+        </Space>
+      </Modal>
     </div>
   );
 }

@@ -50,7 +50,7 @@ src/
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
 │   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）、GET /api/products/price-trend（趋势图）、GET /api/products/export（xlsx 导出）、POST /api/products/batch（批量导入）、POST /api/products/batch-delete(/preview)（按标签批删）
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目
-│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）
+│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页 + 工具名/成败筛选、保留期清理 purge）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）
 │   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
@@ -61,7 +61,7 @@ src/
 │   ├── queue_service.rs #   抓取队列：选择器解析、入队去重、全局唯一 worker 串行消费
 │   ├── ai_provider_service.rs # AI 供应商配置管理 + 连通性测试
 │   ├── ai_settings_service.rs # AI 应用设置：用户自定义抓取提示词读写（存 app_settings KV 表）
-│   ├── ai_tool_call_service.rs # AI 工具调用审计查询（分页）
+│   ├── ai_tool_call_service.rs # AI 工具调用审计：分页筛选查询（工具名/成败）+ 保留期清理（PurgeCriteria 二选一校验）
 │   ├── trend_service.rs #   价格趋势计算（按商品聚合 items 成 PriceTrendSeries）
 │   ├── cancel_token.rs  #   共享取消令牌存储（watch 信号，异步分类任务取消用）
 │   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（AI 驱动抓取 + 两个工具）
@@ -136,7 +136,7 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
 - **AI 基础设施**（详细方案见 `docs/design-ai-module.md`）：
   - `AiGateway`/`AiTool` 端口在 `application/ports.rs`；真实实现 `RigAiGateway` 在 `infrastructure/ai_gateway.rs`，基于 `rig-core` 0.41 的 OpenAI 兼容端点（DeepSeek/千问/Kimi 等通用），手写 ReAct 工具循环。
   - AI 供应商配置入库管理（`ai_providers`）：前端「AI 接口管理」卡片可增删改查、设默认、测试连通性；密钥明文存本地 SQLite，响应掩码显示。优先级：**DB 默认配置 > `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 环境变量兜底**。
-  - AI 工具可直接产生读写结果（完全自动，无人工确认）；每次工具执行落 `ai_tool_calls` 审计表（工具名/参数/结果或错误/耗时），前端「AI 工具调用记录」可回查。
+  - AI 工具可直接产生读写结果（完全自动，无人工确认）；每次工具执行落 `ai_tool_calls` 审计表（工具名/参数/结果或错误/耗时），前端「AI 工具调用记录」可回查（按工具名/成败筛选）。审计记录只增不改，**不做单条删除**；膨胀控制走保留期清理：`POST /api/ai/tool-calls/purge(/preview)`，条件二选一——`before_days`（删 N 天前，0=清空）或 `keep_latest`（仅保留最新 N 条），交互沿用 preview/confirm 批删模式。
   - **AI 自动打标签用例**（`application/ai/classify_service.rs`，详细方案见 `docs/design-batch-import-ai-classify.md`）：传入商品 id 列表，AI 调 `list_tags` 等工具为商品匹配标签并写回。两条路径：`POST /api/ai/classify-products` 同步（单次上限 50 个）与 `POST /api/ai/classify-tasks` 异步任务（每批 50 个，内存仓储，可查进度、可取消——取消信号走 `cancel_token.rs` 的 watch 令牌）。后续新用例来了只需在 `application/ai/` 加 service 并注册工具。
 
 ## 扩展约定
