@@ -8,6 +8,7 @@ import {
   Collapse,
   Divider,
   Empty,
+  Input,
   InputNumber,
   Modal,
   Progress,
@@ -15,8 +16,10 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
+import { EditOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiDelete, apiPost, apiPut, fmtTime } from '@/lib/api';
 import { useQueue } from '@/lib/queue';
@@ -140,6 +143,10 @@ export function QueuesPanel() {
     }
   };
 
+  // 改名弹窗（CSS 省略号替代 Typography editable 的 JS 测量，避开折叠面板内测量错误的 antd 已知问题）
+  const [renameTarget, setRenameTarget] = useState<QueueProgress | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
   // ---------- 历史队列清理 ----------
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [purgeMode, setPurgeMode] = useState<'before_days' | 'keep_latest'>('before_days');
@@ -254,18 +261,32 @@ export function QueuesPanel() {
       render: (name: string, q: QueueProgress) => (
         <Space size={6} style={{ maxWidth: '100%' }}>
           {q.status === 'running' && <Badge status="processing" />}
-          <Typography.Text
-            strong={q.status === 'running'}
-            ellipsis={{ tooltip: name }}
-            style={{ maxWidth: 240 }}
-            editable={{
-              tooltip: '改名',
-              maxLength: 40,
-              onChange: (v) => renameQueue(q.id, v),
+          <Tooltip title={name || null}>
+            <span
+              style={{
+                display: 'inline-block',
+                maxWidth: 320,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle',
+                fontWeight: q.status === 'running' ? 600 : undefined,
+              }}
+            >
+              {name || `队列 #${q.id}`}
+            </span>
+          </Tooltip>
+          <Button
+            type="text"
+            size="small"
+            title="改名"
+            icon={<EditOutlined />}
+            style={{ padding: 0, width: 18, height: 18, opacity: 0.45, flexShrink: 0 }}
+            onClick={() => {
+              setRenameTarget(q);
+              setRenameValue(name);
             }}
-          >
-            {name || `队列 #${q.id}`}
-          </Typography.Text>
+          />
           <Typography.Text type="secondary" className="num" style={{ fontSize: 12, flexShrink: 0 }}>
             #{q.id}
           </Typography.Text>
@@ -572,6 +593,36 @@ export function QueuesPanel() {
             ]}
           />
         )}
+
+        <Modal
+          title={`修改队列名称（#${renameTarget?.id}）`}
+          open={renameTarget !== null}
+          onOk={async () => {
+            if (renameTarget && renameValue.trim()) {
+              await renameQueue(renameTarget.id, renameValue);
+            }
+            setRenameTarget(null);
+          }}
+          onCancel={() => setRenameTarget(null)}
+          okText="保存"
+          cancelText="取消"
+          width={380}
+        >
+          <Input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            maxLength={40}
+            showCount
+            autoFocus
+            placeholder="输入新名称"
+            onPressEnter={async () => {
+              if (renameTarget && renameValue.trim()) {
+                await renameQueue(renameTarget.id, renameValue);
+              }
+              setRenameTarget(null);
+            }}
+          />
+        </Modal>
 
         <Modal
           title="清理历史队列"
