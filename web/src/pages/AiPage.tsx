@@ -774,7 +774,7 @@ export function AiPage() {
                     {
                       title: 'Token 入/出',
                       key: 'tokens',
-                      width: 150,
+                      width: 175,
                       align: 'right',
                       render: (_, c) =>
                         c.input_tokens == null ? (
@@ -787,10 +787,12 @@ export function AiPage() {
                                 : `输入 ${c.input_tokens} / 输出 ${c.output_tokens ?? 0}`
                             }
                           >
-                            <span className="num" style={{ fontSize: 12 }}>
+                            <span className="num" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                               {c.input_tokens} / {c.output_tokens ?? 0}
                               {(c.cached_input_tokens ?? 0) > 0 && (
-                                <span style={{ opacity: 0.6 }}>（缓存 {c.cached_input_tokens}）</span>
+                                <span style={{ opacity: 0.55, fontSize: 11 }}>
+                                  （缓 {c.cached_input_tokens}）
+                                </span>
                               )}
                             </span>
                           </Tooltip>
