@@ -70,25 +70,46 @@ interface ProviderFormValues {
   api_key?: string;
   model: string;
   timeout_secs: number;
-  extra_params?: string;
 }
 
-/** 按供应商生成「关闭思考」的请求参数：千问系用 enable_thinking，其余按 DeepSeek 格式（OpenAI 兼容端点中最常见） */
-function thinkingOffJson(baseUrl: string): string {
-  return /qwen|dashscope/i.test(baseUrl)
-    ? '{"enable_thinking": false}'
-    : '{"thinking": {"type": "disabled"}}';
+// ---------- 思考模式控制 ----------
+type ThinkingEffort = 'low' | 'high' | 'max';
+interface ThinkingState {
+  on: boolean;
+  effort: ThinkingEffort;
 }
 
-/** 判断已保存的额外参数是否就是「关闭思考」（决定开关的回显状态） */
-function isThinkingOffParams(raw: string | null): boolean {
-  if (!raw) return false;
+const EFFORT_LABEL: Record<ThinkingEffort, string> = { low: '低', high: '高', max: '最高' };
+const DEFAULT_THINKING: ThinkingState = { on: true, effort: 'high' };
+
+const isQwenUrl = (baseUrl: string) => /qwen|dashscope/i.test(baseUrl);
+
+/** 已保存参数 → 思考模式状态；null = 供应商默认（开 + 高）；无法识别的自定义参数返回 null */
+function parseThinkingParams(raw: string | null): ThinkingState | null {
+  if (!raw) return DEFAULT_THINKING;
   try {
     const v = JSON.parse(raw);
-    return v?.thinking?.type === 'disabled' || v?.enable_thinking === false;
+    if (v?.thinking?.type === 'disabled' || v?.enable_thinking === false) {
+      return { on: false, effort: 'high' };
+    }
+    if (v?.thinking?.type === 'enabled' || v?.enable_thinking === true || v?.reasoning_effort) {
+      const e = v?.reasoning_effort;
+      return { on: true, effort: e === 'low' || e === 'max' ? e : 'high' };
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** 表单状态 → 提交参数；开 + 高是供应商默认，不带任何参数 */
+function buildThinkingParams(baseUrl: string, s: ThinkingState): string | null {
+  if (isQwenUrl(baseUrl)) {
+    return s.on ? '{"enable_thinking": true}' : '{"enable_thinking": false}';
+  }
+  if (!s.on) return '{"thinking": {"type": "disabled"}}';
+  if (s.effort === 'high') return null;
+  return JSON.stringify({ thinking: { type: 'enabled' }, reasoning_effort: s.effort });
 }
 
 // 工具名标签配色：抓取工具蓝、写库工具绿、LLM 调用紫，其余默认
@@ -147,7 +168,7 @@ export function AiPage() {
 
   // ---------- 供应商表单 ----------
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [thinkingOff, setThinkingOff] = useState(false);
+  const [thinking, setThinking] = useState<ThinkingState>(DEFAULT_THINKING);
   const [form] = Form.useForm<ProviderFormValues>();
   const watchedBaseUrl = Form.useWatch('base_url', form) ?? '';
 
@@ -169,10 +190,7 @@ export function AiPage() {
       api_key: values.api_key?.trim() || null,
       model: values.model.trim(),
       timeout_secs: values.timeout_secs || 60,
-      // 关思考开关优先；否则用自定义参数
-      extra_params: thinkingOff
-        ? thinkingOffJson(values.base_url)
-        : values.extra_params?.trim() || null,
+      extra_params: buildThinkingParams(values.base_url, thinking),
     };
     const isEdit = editingId !== null;
     try {
@@ -183,7 +201,7 @@ export function AiPage() {
       }
       message.success(isEdit ? '已保存修改' : '已添加配置');
       setEditingId(null);
-      setThinkingOff(false);
+      setThinking(DEFAULT_THINKING);
       form.resetFields();
       refresh();
     } catch (e) {
@@ -194,8 +212,7 @@ export function AiPage() {
   const startEdit = async (id: number) => {
     try {
       const p = await apiGet<AiProvider>(`/api/ai/providers/${id}`);
-      const off = isThinkingOffParams(p.extra_params);
-      setThinkingOff(off);
+      setThinking(parseThinkingParams(p.extra_params) ?? DEFAULT_THINKING);
       setEditingId(p.id);
       form.setFieldsValue({
         name: p.name,
@@ -203,8 +220,6 @@ export function AiPage() {
         api_key: undefined, // 密钥不回填，留空表示不修改
         model: p.model,
         timeout_secs: p.timeout_secs,
-        // 关思考参数由开关接管，不进自定义框
-        extra_params: off ? undefined : p.extra_params ?? undefined,
       });
     } catch (e) {
       message.error(`加载配置失败: ${(e as Error).message}`);
@@ -452,7 +467,7 @@ export function AiPage() {
                                 <Button
                                   onClick={() => {
                                     setEditingId(null);
-                                    setThinkingOff(false);
+                                    setThinking(DEFAULT_THINKING);
                                     form.resetFields();
                                   }}
                                 >
@@ -463,56 +478,44 @@ export function AiPage() {
                           </Form.Item>
                         </Col>
                       </Row>
-                      <Form.Item label="思考模式" style={{ marginBottom: 8 }}>
+                      <Form.Item label="思考模式" style={{ marginBottom: 0 }}>
                         <Space size={12} wrap>
                           <Switch
-                            checked={thinkingOff}
-                            onChange={setThinkingOff}
-                            checkedChildren="已关闭"
-                            unCheckedChildren="默认"
+                            checked={thinking.on}
+                            onChange={(on) => setThinking((t) => ({ ...t, on }))}
+                            checkedChildren="开"
+                            unCheckedChildren="关"
                           />
+                          {thinking.on && !isQwenUrl(watchedBaseUrl) && (
+                            <Segmented
+                              size="small"
+                              value={thinking.effort}
+                              onChange={(v) =>
+                                setThinking((t) => ({ ...t, effort: v as ThinkingEffort }))
+                              }
+                              options={[
+                                { label: '低', value: 'low' },
+                                { label: '高（默认）', value: 'high' },
+                                { label: '最高', value: 'max' },
+                              ]}
+                            />
+                          )}
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            {thinkingOff
-                              ? `每次请求将发送：${thinkingOffJson(watchedBaseUrl)}`
-                              : 'DeepSeek V4 / 千问等模型默认开启思考，思考链按输出计费；筛选类简单任务建议关闭（省 token、降延迟）'}
+                            {(() => {
+                              const params = buildThinkingParams(watchedBaseUrl, thinking);
+                              if (!thinking.on) {
+                                return `已关闭思考：筛选类任务最省 token、延迟最低。将发送：${params}`;
+                              }
+                              return params
+                                ? `将发送：${params}`
+                                : '供应商默认即开启思考（高强度），无需额外参数';
+                            })()}
                           </Typography.Text>
                         </Space>
                       </Form.Item>
-                      <Form.Item
-                        name="extra_params"
-                        label="自定义额外参数（高级，与开关二选一）"
-                        style={{ marginBottom: 0 }}
-                        rules={[
-                          {
-                            validator: (_, v?: string) => {
-                              if (!v || !v.trim()) return Promise.resolve();
-                              try {
-                                const parsed = JSON.parse(v);
-                                if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-                                  return Promise.reject(new Error('必须是 JSON 对象'));
-                                }
-                                return Promise.resolve();
-                              } catch {
-                                return Promise.reject(new Error('不是合法 JSON'));
-                              }
-                            },
-                          },
-                        ]}
-                      >
-                        <Input.TextArea
-                          disabled={thinkingOff}
-                          autoSize={{ minRows: 1, maxRows: 4 }}
-                          placeholder={
-                            thinkingOff
-                              ? '关思考开关已打开，自定义参数不生效'
-                              : '原样合并进 API 请求体，如 {"reasoning_effort": "low"}'
-                          }
-                          style={{ fontFamily: 'monospace', fontSize: 12 }}
-                        />
-                      </Form.Item>
                     </Form>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。编辑时密钥/自定义参数留空表示不修改。
+                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。编辑时密钥留空表示不修改。
                     </Typography.Text>
                   </Card>
                   <Table<AiProvider>
@@ -527,20 +530,27 @@ export function AiPage() {
                       { title: '模型', dataIndex: 'model' },
                       { title: '密钥', dataIndex: 'api_key', render: (v: string | null) => v || '-' },
                       {
-                        title: '额外参数',
+                        title: '思考模式',
                         dataIndex: 'extra_params',
-                        ellipsis: true,
-                        width: 180,
-                        render: (v: string | null) =>
-                          !v ? (
-                            '-'
-                          ) : isThinkingOffParams(v) ? (
-                            <Tag color="green" style={{ marginInlineEnd: 0 }}>关思考</Tag>
-                          ) : (
-                            <Tooltip title={v}>
-                              <span className="num" style={{ fontSize: 12, opacity: 0.75 }}>{v}</span>
-                            </Tooltip>
-                          ),
+                        width: 110,
+                        render: (v: string | null) => {
+                          const t = parseThinkingParams(v);
+                          if (t === null) {
+                            // 无法识别的自定义参数（后端仍支持，前端已不再提供入口）
+                            return (
+                              <Tooltip title={v}>
+                                <span className="num" style={{ fontSize: 12, opacity: 0.75 }}>{v}</span>
+                              </Tooltip>
+                            );
+                          }
+                          if (!t.on) return <Tag style={{ marginInlineEnd: 0 }}>关思考</Tag>;
+                          if (!v) return <span style={{ opacity: 0.5 }}>开 · 默认</span>;
+                          return (
+                            <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                              思考 · {EFFORT_LABEL[t.effort]}
+                            </Tag>
+                          );
+                        },
                       },
                       {
                         title: '默认',
