@@ -14,6 +14,7 @@ import {
   Segmented,
   Select,
   Space,
+  Switch,
   Table,
   Tabs,
   Tag,
@@ -72,6 +73,24 @@ interface ProviderFormValues {
   extra_params?: string;
 }
 
+/** 按供应商生成「关闭思考」的请求参数：千问系用 enable_thinking，其余按 DeepSeek 格式（OpenAI 兼容端点中最常见） */
+function thinkingOffJson(baseUrl: string): string {
+  return /qwen|dashscope/i.test(baseUrl)
+    ? '{"enable_thinking": false}'
+    : '{"thinking": {"type": "disabled"}}';
+}
+
+/** 判断已保存的额外参数是否就是「关闭思考」（决定开关的回显状态） */
+function isThinkingOffParams(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const v = JSON.parse(raw);
+    return v?.thinking?.type === 'disabled' || v?.enable_thinking === false;
+  } catch {
+    return false;
+  }
+}
+
 // 工具名标签配色：抓取工具蓝、写库工具绿、LLM 调用紫，其余默认
 const TOOL_TAG_COLOR: Record<string, string> = {
   xianyu_search: 'blue',
@@ -128,7 +147,9 @@ export function AiPage() {
 
   // ---------- 供应商表单 ----------
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [thinkingOff, setThinkingOff] = useState(false);
   const [form] = Form.useForm<ProviderFormValues>();
+  const watchedBaseUrl = Form.useWatch('base_url', form) ?? '';
 
   const applyPreset = (key: string) => {
     const preset = AI_PRESETS[key];
@@ -148,7 +169,10 @@ export function AiPage() {
       api_key: values.api_key?.trim() || null,
       model: values.model.trim(),
       timeout_secs: values.timeout_secs || 60,
-      extra_params: values.extra_params?.trim() || null,
+      // 关思考开关优先；否则用自定义参数
+      extra_params: thinkingOff
+        ? thinkingOffJson(values.base_url)
+        : values.extra_params?.trim() || null,
     };
     const isEdit = editingId !== null;
     try {
@@ -159,6 +183,7 @@ export function AiPage() {
       }
       message.success(isEdit ? '已保存修改' : '已添加配置');
       setEditingId(null);
+      setThinkingOff(false);
       form.resetFields();
       refresh();
     } catch (e) {
@@ -169,6 +194,8 @@ export function AiPage() {
   const startEdit = async (id: number) => {
     try {
       const p = await apiGet<AiProvider>(`/api/ai/providers/${id}`);
+      const off = isThinkingOffParams(p.extra_params);
+      setThinkingOff(off);
       setEditingId(p.id);
       form.setFieldsValue({
         name: p.name,
@@ -176,7 +203,8 @@ export function AiPage() {
         api_key: undefined, // 密钥不回填，留空表示不修改
         model: p.model,
         timeout_secs: p.timeout_secs,
-        extra_params: p.extra_params ?? undefined,
+        // 关思考参数由开关接管，不进自定义框
+        extra_params: off ? undefined : p.extra_params ?? undefined,
       });
     } catch (e) {
       message.error(`加载配置失败: ${(e as Error).message}`);
@@ -424,6 +452,7 @@ export function AiPage() {
                                 <Button
                                   onClick={() => {
                                     setEditingId(null);
+                                    setThinkingOff(false);
                                     form.resetFields();
                                   }}
                                 >
@@ -434,9 +463,24 @@ export function AiPage() {
                           </Form.Item>
                         </Col>
                       </Row>
+                      <Form.Item label="思考模式" style={{ marginBottom: 8 }}>
+                        <Space size={12} wrap>
+                          <Switch
+                            checked={thinkingOff}
+                            onChange={setThinkingOff}
+                            checkedChildren="已关闭"
+                            unCheckedChildren="默认"
+                          />
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {thinkingOff
+                              ? `每次请求将发送：${thinkingOffJson(watchedBaseUrl)}`
+                              : 'DeepSeek V4 / 千问等模型默认开启思考，思考链按输出计费；筛选类简单任务建议关闭（省 token、降延迟）'}
+                          </Typography.Text>
+                        </Space>
+                      </Form.Item>
                       <Form.Item
                         name="extra_params"
-                        label="额外请求参数（可选）"
+                        label="自定义额外参数（高级，与开关二选一）"
                         style={{ marginBottom: 0 }}
                         rules={[
                           {
@@ -456,15 +500,19 @@ export function AiPage() {
                         ]}
                       >
                         <Input.TextArea
+                          disabled={thinkingOff}
                           autoSize={{ minRows: 1, maxRows: 4 }}
-                          placeholder='如 DeepSeek 关思考：{"thinking": {"type": "disabled"}}'
+                          placeholder={
+                            thinkingOff
+                              ? '关思考开关已打开，自定义参数不生效'
+                              : '原样合并进 API 请求体，如 {"reasoning_effort": "low"}'
+                          }
                           style={{ fontFamily: 'monospace', fontSize: 12 }}
                         />
                       </Form.Item>
                     </Form>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。额外请求参数会原样合并进每次 API
-                      请求体（可关思考/调推理强度，见供应商文档）；编辑时留空表示不修改，填 {'{}'} 表示清除。
+                      选择模板可自动填入推荐的 Base URL 与模型，也可手动修改。编辑时密钥/自定义参数留空表示不修改。
                     </Typography.Text>
                   </Card>
                   <Table<AiProvider>
@@ -484,12 +532,14 @@ export function AiPage() {
                         ellipsis: true,
                         width: 180,
                         render: (v: string | null) =>
-                          v ? (
+                          !v ? (
+                            '-'
+                          ) : isThinkingOffParams(v) ? (
+                            <Tag color="green" style={{ marginInlineEnd: 0 }}>关思考</Tag>
+                          ) : (
                             <Tooltip title={v}>
                               <span className="num" style={{ fontSize: 12, opacity: 0.75 }}>{v}</span>
                             </Tooltip>
-                          ) : (
-                            '-'
                           ),
                       },
                       {
