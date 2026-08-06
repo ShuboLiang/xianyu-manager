@@ -3,17 +3,22 @@ import {
   App as AntApp,
   Alert,
   Button,
+  Descriptions,
+  Drawer,
+  Empty,
   Input,
   Space,
+  Spin,
   Tag,
   theme as antdTheme,
   Typography,
 } from 'antd';
-import { RobotOutlined, SendOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, RobotOutlined, SendOutlined } from '@ant-design/icons';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { apiPost } from '@/lib/api';
-import type { AiChatResponse } from '@/types/api';
+import { apiGet, apiPost } from '@/lib/api';
+import type { AiChatResponse, AiToolInfoResponse } from '@/types/api';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -123,7 +128,16 @@ export function AiChat({ configured }: { configured: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // 可用工具清单（打开抽屉时懒加载，点击前不请求）
+  const { data: tools, isFetching: toolsLoading } = useQuery({
+    queryKey: ['aiTools'],
+    queryFn: () => apiGet<AiToolInfoResponse[]>('/api/ai/tools'),
+    placeholderData: keepPreviousData,
+    enabled: toolsOpen,
+  });
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -177,6 +191,15 @@ export function AiChat({ configured }: { configured: boolean }) {
           基于 19 个管理工具，AI 自主查改数据（商品 / 标签 / 队列 / 统计）
         </Typography.Text>
         <span style={{ flex: 1 }} />
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0 }}
+          icon={<AppstoreOutlined />}
+          onClick={() => setToolsOpen(true)}
+        >
+          可用工具（{(tools ?? []).length || 19}）
+        </Button>
         {messages.length > 0 && (
           <Button
             type="link"
@@ -318,6 +341,88 @@ export function AiChat({ configured }: { configured: boolean }) {
           发送
         </Button>
       </div>
+
+      {/* 可用工具清单抽屉 */}
+      <Drawer
+        title={`可用工具（${tools?.length ?? 0}）`}
+        open={toolsOpen}
+        onClose={() => setToolsOpen(false)}
+        width={520}
+      >
+        {toolsLoading && !tools ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <Spin />
+          </div>
+        ) : !tools || tools.length === 0 ? (
+          <Empty description="暂无可用工具" />
+        ) : (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {tools.map((t) => (
+              <div
+                key={t.name}
+                style={{
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: token.borderRadius,
+                  padding: '10px 12px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <Tag color={WRITE_TOOLS.has(t.name) ? 'gold' : 'blue'} style={{ marginInlineEnd: 0 }}>
+                    {t.name}
+                  </Tag>
+                  {WRITE_TOOLS.has(t.name) && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      写操作
+                    </Typography.Text>
+                  )}
+                </div>
+                <Typography.Text style={{ fontSize: 13 }}>{t.description}</Typography.Text>
+                <Descriptions
+                  size="small"
+                  column={1}
+                  style={{ marginTop: 8 }}
+                  items={[
+                    {
+                      key: 'params',
+                      label: '参数',
+                      children: (
+                        <pre
+                          className="num"
+                          style={{
+                            margin: 0,
+                            fontSize: 11,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-all',
+                            maxHeight: 160,
+                            overflowY: 'auto',
+                          }}
+                        >
+                          {JSON.stringify(t.parameters, null, 2)}
+                        </pre>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
+            ))}
+          </Space>
+        )}
+      </Drawer>
     </div>
   );
 }
+
+// 写操作工具名集合：入队/创建/更新/删除等会真实改库的工具
+const WRITE_TOOLS = new Set([
+  'create_product',
+  'update_product',
+  'delete_product',
+  'batch_create_products',
+  'create_tag',
+  'update_tag',
+  'delete_tag',
+  'enqueue',
+  'pause_queue',
+  'resume_queue',
+  'cancel_queue',
+]);
