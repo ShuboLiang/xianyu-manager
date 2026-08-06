@@ -167,7 +167,7 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route("/ai/classify-tasks", post(ai_handler::create_classify_task))
         .route("/ai/classify-tasks/{id}", get(ai_handler::get_classify_task))
         .route("/ai/classify-tasks/{id}/cancel", post(ai_handler::cancel_classify_task))
-        .route("/ai/tools", get(ai_handler::list_admin_tools))
+        .route("/ai/tools", get(ai_handler::list_admin_tools).put(ai_handler::update_admin_tools))
         .route("/ai/chat", post(ai_handler::ai_chat))
         .route(
             "/ai/chat/sessions",

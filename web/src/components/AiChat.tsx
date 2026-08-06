@@ -13,6 +13,7 @@ import {
   Segmented,
   Space,
   Spin,
+  Switch,
   Tag,
   theme as antdTheme,
   Tooltip,
@@ -189,13 +190,45 @@ export function AiChat({ configured }: { configured: boolean }) {
     }
   }, [detail, detailLoading]);
 
-  // 可用工具清单（打开抽屉时懒加载，点击前不请求）
+  // 可用工具清单：常驻拉取（头部按钮要实时显示启用数，不能等抽屉打开才取）
   const { data: tools, isFetching: toolsLoading } = useQuery({
     queryKey: ['aiTools'],
     queryFn: () => apiGet<AiToolInfoResponse[]>('/api/ai/tools'),
     placeholderData: keepPreviousData,
-    enabled: toolsOpen,
   });
+
+  const [togglingTool, setTogglingTool] = useState<string | null>(null);
+
+  // 整体替换全局禁用列表：成功刷新清单，失败回滚（重新拉取）
+  const applyToolAvailability = async (disabledTools: string[]): Promise<boolean> => {
+    try {
+      await apiPut('/api/ai/tools', { disabled_tools: disabledTools });
+      queryClient.invalidateQueries({ queryKey: ['aiTools'] });
+      return true;
+    } catch (e) {
+      toast.error(`保存工具启停失败: ${(e as Error).message}`);
+      queryClient.invalidateQueries({ queryKey: ['aiTools'] });
+      return false;
+    }
+  };
+
+  const toggleTool = async (t: AiToolInfoResponse, enabled: boolean) => {
+    if (togglingTool !== null) return;
+    const currentDisabled = (tools ?? []).filter((x) => !x.enabled).map((x) => x.name);
+    const next = enabled
+      ? currentDisabled.filter((n) => n !== t.name)
+      : [...currentDisabled, t.name];
+    setTogglingTool(t.name);
+    await applyToolAvailability(next);
+    setTogglingTool(null);
+  };
+
+  const enableAllTools = async () => {
+    if (togglingTool !== null) return;
+    setTogglingTool('__all__');
+    await applyToolAvailability([]);
+    setTogglingTool(null);
+  };
 
   const refreshSessions = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['aiSessions'] });
@@ -513,7 +546,7 @@ export function AiChat({ configured }: { configured: boolean }) {
               icon={<AppstoreOutlined />}
               onClick={() => setToolsOpen(true)}
             >
-              可用工具（{(tools ?? []).length || 19}）
+              可用工具（{tools ? tools.filter((t) => t.enabled).length : 19}）
             </Button>
           </Tooltip>
         </div>
@@ -721,8 +754,27 @@ export function AiChat({ configured }: { configured: boolean }) {
         </Typography.Paragraph>
       </Modal>
 
-      {/* 可用工具清单抽屉 */}
-      <Drawer title={`可用工具（${tools?.length ?? 0}）`} open={toolsOpen} onClose={() => setToolsOpen(false)} width={520}>
+      {/* 可用工具清单抽屉：全局启停（影响所有助手会话） */}
+      <Drawer
+        title={
+          tools
+            ? `可用工具（${tools.filter((t) => t.enabled).length}/${tools.length}）`
+            : '可用工具'
+        }
+        open={toolsOpen}
+        onClose={() => setToolsOpen(false)}
+        width={520}
+        extra={
+          <Button
+            size="small"
+            type="link"
+            disabled={!tools || tools.every((t) => t.enabled) || togglingTool !== null}
+            onClick={enableAllTools}
+          >
+            全部启用
+          </Button>
+        }
+      >
         {toolsLoading && !tools ? (
           <div style={{ textAlign: 'center', padding: 40 }}>
             <Spin />
@@ -731,6 +783,16 @@ export function AiChat({ configured }: { configured: boolean }) {
           <Empty description="暂无可用工具" />
         ) : (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type={tools.some((t) => !t.enabled) ? 'warning' : 'info'}
+              showIcon
+              style={{ fontSize: 12 }}
+              message={
+                tools.some((t) => !t.enabled)
+                  ? `已禁用 ${tools.filter((t) => !t.enabled).length} 个工具，禁用的工具不会注册给 AI，下一轮对话即生效`
+                  : '全部工具可用；关闭某个工具后，AI 将无法调用它（全局生效）'
+              }
+            />
             {tools.map((t) => (
               <div
                 key={t.name}
@@ -738,17 +800,28 @@ export function AiChat({ configured }: { configured: boolean }) {
                   border: `1px solid ${token.colorBorderSecondary}`,
                   borderRadius: token.borderRadius,
                   padding: '10px 12px',
+                  opacity: t.enabled ? 1 : 0.55,
+                  background: t.enabled ? 'transparent' : token.colorFillTertiary,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <Tag color={WRITE_TOOLS.has(t.name) ? 'gold' : 'blue'} style={{ marginInlineEnd: 0 }}>
+                  <Tag color={t.is_write ? 'gold' : 'blue'} style={{ marginInlineEnd: 0 }}>
                     {t.name}
                   </Tag>
-                  {WRITE_TOOLS.has(t.name) && (
+                  {t.is_write && (
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       写操作
                     </Typography.Text>
                   )}
+                  <span style={{ flex: 1 }} />
+                  <Switch
+                    size="small"
+                    checked={t.enabled}
+                    loading={togglingTool === t.name}
+                    checkedChildren="启用"
+                    unCheckedChildren="禁用"
+                    onChange={(checked) => toggleTool(t, checked)}
+                  />
                 </div>
                 <Typography.Text style={{ fontSize: 13 }}>{t.description}</Typography.Text>
                 <Descriptions
@@ -786,20 +859,7 @@ export function AiChat({ configured }: { configured: boolean }) {
   );
 }
 
-// 写操作工具名集合：入队/创建/更新/删除等会真实改库的工具
-const WRITE_TOOLS = new Set([
-  'create_product',
-  'update_product',
-  'delete_product',
-  'batch_create_products',
-  'create_tag',
-  'update_tag',
-  'delete_tag',
-  'enqueue',
-  'pause_queue',
-  'resume_queue',
-  'cancel_queue',
-]);
+// 写操作由后端 AiTool::is_write() 返回（AiToolInfoResponse.is_write），前端不再维护硬编码名单
 
 /** JSON 美化：能解析则缩进展示，否则原样输出 */
 function prettyJson(raw: string): string {

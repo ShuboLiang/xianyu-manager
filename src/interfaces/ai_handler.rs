@@ -16,7 +16,7 @@ use super::dto::{
     ConversationDetailResponse, ConversationMessageResponse, ConversationResponse,
     CrawlModeResponse, CrawlPromptRequest, CrawlPromptResponse, PageResponse,
     PendingApprovalQuery, PendingApprovalResponse, RenameConversationRequest,
-    TestConnectionResponse, UpdateCrawlModeRequest,
+    TestConnectionResponse, ToolAvailabilityRequest, UpdateCrawlModeRequest,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -278,18 +278,52 @@ pub async fn cancel_classify_task(
     }
 }
 
-/// GET /api/ai/tools：当前可用的 AI 工具清单（名称/描述/参数 Schema），供外部智能体发现能力
+/// GET /api/ai/tools：当前 AI 工具清单（名称/描述/参数 Schema + 启停状态），供外部智能体发现能力
 pub async fn list_admin_tools(State(state): State<AppState>) -> Json<ApiResponse<Vec<AiToolInfoResponse>>> {
-    let manifest = state.admin_tools_service.tool_manifest();
-    let infos: Vec<AiToolInfoResponse> = manifest
-        .into_iter()
-        .map(|m| AiToolInfoResponse {
-            name: m.name,
-            description: m.description,
-            parameters: m.parameters,
-        })
-        .collect();
-    Json(ApiResponse::ok(infos))
+    match state.admin_tools_service.tool_manifest().await {
+        Ok(manifest) => Json(ApiResponse::ok(
+            manifest
+                .into_iter()
+                .map(|m| AiToolInfoResponse {
+                    name: m.name,
+                    description: m.description,
+                    parameters: m.parameters,
+                    enabled: m.enabled,
+                    is_write: m.is_write,
+                })
+                .collect(),
+        )),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// PUT /api/ai/tools：整体替换全局禁用工具名单，返回更新后的完整清单
+pub async fn update_admin_tools(
+    State(state): State<AppState>,
+    Json(req): Json<ToolAvailabilityRequest>,
+) -> Json<ApiResponse<Vec<AiToolInfoResponse>>> {
+    if let Err(e) = state
+        .admin_tools_service
+        .set_disabled_tools(req.disabled_tools)
+        .await
+    {
+        return Json(ApiResponse::err(e.to_string()));
+    }
+    match state.admin_tools_service.tool_manifest().await {
+        Ok(manifest) => Json(ApiResponse::ok(
+            manifest
+                .into_iter()
+                .map(|m| AiToolInfoResponse {
+                    name: m.name,
+                    description: m.description,
+                    parameters: m.parameters,
+                    enabled: m.enabled,
+                    is_write: m.is_write,
+                })
+                .collect(),
+        )),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
 }
 
 /// POST /api/ai/chat：通用管理助手，接收自然语言指令，AI 自主调用工具完成查询/操作

@@ -155,7 +155,7 @@ async fn main() -> anyhow::Result<()> {
             )) as Arc<dyn crate::application::ai::crawl_shared::ProductCrawler>
         });
     let ai_settings_service = Arc::new(AiSettingsService::new(
-        settings_repo,
+        settings_repo.clone(),
         config.ai_crawl_mode.clone(),
     ));
 
@@ -182,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
         trend_service.clone(),
         ai_gateway_for_admin,
         tool_approval.clone(),
+        settings_repo.clone(),
     ));
     let chat_session_service = Arc::new(ChatSessionService::new(
         conversation_repo,

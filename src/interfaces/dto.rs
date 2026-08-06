@@ -624,7 +624,7 @@ pub struct AiChatResponse {
     pub reply: String,
 }
 
-/// 单个 AI 工具的清单（供外部智能体发现能力）
+/// 单个 AI 工具的清单（供外部智能体发现能力 + 前端「可用工具」抽屉展示）
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct AiToolInfoResponse {
@@ -633,6 +633,18 @@ pub struct AiToolInfoResponse {
     /// 参数的 JSON Schema
     #[ts(type = "any")]
     pub parameters: serde_json::Value,
+    /// 当前是否启用（未被全局禁用）
+    pub enabled: bool,
+    /// 是否写操作（会真实改库）
+    pub is_write: bool,
+}
+
+/// 全局禁用工具名单（整体替换；空数组 = 全部恢复）
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ToolAvailabilityRequest {
+    /// 禁用的工具名列表（未知工具名会被拒绝并列出）
+    pub disabled_tools: Vec<String>,
 }
 
 /// AI 助手会话摘要（列表用）

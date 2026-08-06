@@ -6,12 +6,13 @@
 //! - 读工具尽量收敛结果（分页、字段裁剪），避免 AI 上下文被海量数据淹没；
 //! - 写工具通过 description 明确副作用，删除类工具描述中要求先确认。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value as JsonValue};
 
+use crate::application::ai::tool_approval::ToolApprovalRegistry;
 use crate::application::item_service::ItemService;
 use crate::application::ports::{AiGateway, AiTool};
 use crate::application::product_service::{ProductPatch, ProductService};
@@ -19,17 +20,19 @@ use crate::application::queue_service::{EnqueueTarget, QueueProgress, QueueServi
 use crate::application::stats_service::StatsService;
 use crate::application::tag_service::{TagPatch, TagService};
 use crate::application::trend_service::TrendService;
-use crate::application::ai::tool_approval::ToolApprovalRegistry;
 use crate::domain::ai_tool_call::source as ai_source;
 use crate::domain::crawl_queue::Selector;
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
 use crate::domain::product::Product;
-use crate::domain::repository::Page;
+use crate::domain::repository::{Page, SettingsRepository};
 use crate::domain::tag::Tag;
 
 /// 管理 agent 最大轮数（读写链式操作可能较多，放宽到 12）
 const MAX_ROUNDS: u32 = 12;
+
+/// 全局禁用的 AI 助手工具名（app_settings KV，JSON 数组；缺省 = 全部可用）
+pub const AI_TOOLS_DISABLED_KEY: &str = "ai_tools_disabled";
 
 /// 管理助手系统提示词：角色 + 工具使用规则
 const SYSTEM_PROMPT: &str = r#"你是一个闲鱼二手商品管理后台的 AI 助手，可以查询和操作后台数据（商品、标签、抓取记录、抓取队列、统计）。
@@ -54,6 +57,8 @@ pub struct AdminToolsService {
     ai_gateway: Arc<dyn AiGateway>,
     /// 写操作确认闸口（会话模式 + 待确认审批）
     approval: ToolApprovalRegistry,
+    /// 全局禁用工具名单的存取（app_settings KV）
+    settings: Arc<dyn SettingsRepository>,
 }
 
 impl AdminToolsService {
@@ -67,6 +72,7 @@ impl AdminToolsService {
         trend: Arc<TrendService>,
         ai_gateway: Arc<dyn AiGateway>,
         approval: ToolApprovalRegistry,
+        settings: Arc<dyn SettingsRepository>,
     ) -> Self {
         Self {
             products,
@@ -77,6 +83,7 @@ impl AdminToolsService {
             trend,
             ai_gateway,
             approval,
+            settings,
         }
     }
 
@@ -105,24 +112,76 @@ impl AdminToolsService {
         ]
     }
 
-    /// 工具清单（name/description/schema），供外部智能体发现能力
-    pub fn tool_manifest(&self) -> Vec<ToolManifest> {
-        self.tools()
+    /// 当前全局禁用的工具名（app_settings 里的 JSON 数组；缺省/解析失败 = 空 = 全部可用）
+    pub async fn disabled_tool_names(&self) -> Vec<String> {
+        match self.settings.get(AI_TOOLS_DISABLED_KEY).await {
+            Ok(Some(raw)) => serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 实际注册给 agent 的工具：全量过滤掉禁用的（每条消息实时读取，下一轮生效）
+    pub async fn active_tools(&self) -> Result<Vec<Arc<dyn AiTool>>, DomainError> {
+        let disabled: HashSet<String> =
+            self.disabled_tool_names().await.into_iter().collect();
+        Ok(self
+            .tools()
+            .into_iter()
+            .filter(|t| !disabled.contains(t.name()))
+            .collect())
+    }
+
+    /// 工具清单（name/description/schema + enabled/is_write），返回全部工具；
+    /// 供外部智能体发现能力与前端「可用工具」抽屉展示（禁用项标注 enabled=false）。
+    pub async fn tool_manifest(&self) -> Result<Vec<ToolManifest>, DomainError> {
+        let disabled: HashSet<String> =
+            self.disabled_tool_names().await.into_iter().collect();
+        Ok(self
+            .tools()
             .iter()
             .map(|t| ToolManifest {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: t.parameters_schema(),
+                enabled: !disabled.contains(t.name()),
+                is_write: t.is_write(),
             })
-            .collect()
+            .collect())
     }
 
-    /// 跑一轮通用管理 agent：用户指令 + 全部工具（无会话上下文，写工具不弹确认）
+    /// 整体替换全局禁用工具名单：逐名校验必须是已知工具，未知名报错列出；
+    /// 空数组 = 全部恢复。返回实际存储的禁用列表。
+    pub async fn set_disabled_tools(&self, mut names: Vec<String>) -> Result<Vec<String>, DomainError> {
+        let known: HashSet<String> =
+            self.tools().iter().map(|t| t.name().to_string()).collect();
+        names.sort();
+        names.dedup();
+        let unknown: Vec<&String> = names
+            .iter()
+            .filter(|n| !known.contains(*n))
+            .collect();
+        if !unknown.is_empty() {
+            return Err(DomainError::InvalidInput(format!(
+                "未知工具名：{}（合法工具见 /api/ai/tools）",
+                unknown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("、")
+            )));
+        }
+        let raw = serde_json::to_string(&names)
+            .map_err(|e| DomainError::Infrastructure(format!("序列化禁用列表失败: {e}")))?;
+        self.settings.set(AI_TOOLS_DISABLED_KEY, &raw).await?;
+        Ok(names)
+    }
+
+    /// 跑一轮通用管理 agent：用户指令 + 启用工具（无会话上下文，写工具不弹确认）
     pub async fn chat(&self, user: &str) -> Result<String, DomainError> {
         if user.trim().is_empty() {
             return Err(DomainError::InvalidInput("消息不能为空".into()));
         }
-        let tools = self.tools();
+        let tools = self.active_tools().await?;
         self.ai_gateway
             .run_agent(SYSTEM_PROMPT, user, &tools, MAX_ROUNDS, ai_source::ASSISTANT, None)
             .await
@@ -141,7 +200,7 @@ impl AdminToolsService {
             return Err(DomainError::InvalidInput("消息不能为空".into()));
         }
         let prompt = build_history_prompt(user, history);
-        let tools = self.tools();
+        let tools = self.active_tools().await?;
         let approval = self.approval.handle(conversation_id);
         self.ai_gateway
             .run_agent(SYSTEM_PROMPT, &prompt, &tools, MAX_ROUNDS, ai_source::ASSISTANT, Some(approval))
@@ -155,6 +214,10 @@ pub struct ToolManifest {
     pub name: String,
     pub description: String,
     pub parameters: JsonValue,
+    /// 当前是否启用（未被全局禁用）
+    pub enabled: bool,
+    /// 是否写操作（会真实改库）
+    pub is_write: bool,
 }
 
 // ---------- 参数解析辅助 ----------
@@ -1155,7 +1218,141 @@ fn build_history_prompt(user: &str, history: &[(String, String)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::fmt_ts;
+    use super::{AdminToolsService, AI_TOOLS_DISABLED_KEY};
+    use crate::application::ai::tool_approval::ToolApprovalRegistry;
+    use crate::application::item_service::ItemService;
+    use crate::application::ports::AiGateway;
+    use crate::application::product_service::ProductService;
+    use crate::application::queue_service::QueueService;
+    use crate::application::stats_service::StatsService;
+    use crate::application::tag_service::TagService;
+    use crate::application::trend_service::TrendService;
+    use crate::domain::error::DomainError;
+    use crate::domain::repository::{
+        ItemRepository, ProductRepository, QueueRepository, SettingsRepository, TagRepository,
+    };
+    use crate::infrastructure::ai_gateway::MockAiGateway;
+    use crate::infrastructure::persistence::sqlite::{
+        self, SqliteItemRepository, SqliteProductRepository, SqliteQueueRepository,
+        SqliteSettingsRepository, SqliteTagRepository,
+    };
+    use crate::infrastructure::xianyu_gateway::MockXianYuGateway;
+
+    /// 用 SQLite 内存库构造一个完整可用的 AdminToolsService（工具只需构造，不真正执行）
+    async fn build_service() -> (AdminToolsService, Arc<dyn SettingsRepository>) {
+        let pool = sqlite::connect(":memory:").await.unwrap();
+        let item_repo: Arc<dyn ItemRepository> = Arc::new(SqliteItemRepository::new(pool.clone()));
+        let tag_repo: Arc<dyn TagRepository> = Arc::new(SqliteTagRepository::new(pool.clone()));
+        let product_repo: Arc<dyn ProductRepository> =
+            Arc::new(SqliteProductRepository::new(pool.clone()));
+        let queue_repo: Arc<dyn QueueRepository> = Arc::new(SqliteQueueRepository::new(pool.clone()));
+        let settings_repo: Arc<dyn SettingsRepository> =
+            Arc::new(SqliteSettingsRepository::new(pool));
+
+        let item_service = Arc::new(ItemService::new(item_repo.clone()));
+        let tag_service = Arc::new(TagService::new(tag_repo.clone()));
+        let product_service = Arc::new(ProductService::new(
+            product_repo.clone(),
+            tag_repo.clone(),
+            item_repo.clone(),
+            queue_repo.clone(),
+        ));
+        let gateway: Arc<dyn crate::application::ports::XianYuGateway> = Arc::new(MockXianYuGateway);
+        let queue_service = Arc::new(QueueService::new(
+            queue_repo,
+            product_repo.clone(),
+            tag_repo,
+            gateway,
+            item_repo.clone(),
+            None,
+        ));
+        let stats_service = Arc::new(StatsService::new(item_repo.clone(), product_repo.clone()));
+        let trend_service = Arc::new(TrendService::new(item_repo, product_repo.clone()));
+        let ai_gateway: Arc<dyn AiGateway> = Arc::new(MockAiGateway);
+
+        let service = AdminToolsService::new(
+            product_service,
+            tag_service,
+            item_service,
+            queue_service,
+            stats_service,
+            trend_service,
+            ai_gateway,
+            ToolApprovalRegistry::new(),
+            settings_repo.clone(),
+        );
+        (service, settings_repo)
+    }
+
+    #[tokio::test]
+    async fn disabled_tools_reject_unknown_names() {
+        let (service, _settings) = build_service().await;
+        let err = service
+            .set_disabled_tools(vec!["nonexistent_tool".to_string()])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::InvalidInput(_)));
+        assert!(err.to_string().contains("nonexistent_tool"));
+    }
+
+    #[tokio::test]
+    async fn active_tools_filters_disabled() {
+        let (service, settings) = build_service().await;
+        let total = service.tools().len();
+
+        service
+            .set_disabled_tools(vec!["delete_product".to_string(), "enqueue".to_string()])
+            .await
+            .unwrap();
+        let active_names: Vec<String> = service
+            .active_tools()
+            .await
+            .unwrap()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        assert!(!active_names.contains(&"delete_product".to_string()));
+        assert!(!active_names.contains(&"enqueue".to_string()));
+        assert_eq!(active_names.len(), total - 2);
+
+        // KV 里确实写入了 JSON 数组
+        let raw = settings.get(AI_TOOLS_DISABLED_KEY).await.unwrap().unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&raw).unwrap();
+        assert!(parsed.contains(&"delete_product".to_string()));
+    }
+
+    #[tokio::test]
+    async fn tool_manifest_marks_disabled() {
+        let (service, _settings) = build_service().await;
+        service
+            .set_disabled_tools(vec!["delete_product".to_string()])
+            .await
+            .unwrap();
+        let manifest = service.tool_manifest().await.unwrap();
+        assert_eq!(manifest.len(), service.tools().len());
+
+        let delete = manifest.iter().find(|m| m.name == "delete_product").unwrap();
+        assert!(!delete.enabled);
+        assert!(delete.is_write);
+
+        let list = manifest.iter().find(|m| m.name == "list_products").unwrap();
+        assert!(list.enabled);
+        assert!(!list.is_write);
+    }
+
+    #[tokio::test]
+    async fn empty_disabled_restores_all() {
+        let (service, _settings) = build_service().await;
+        service
+            .set_disabled_tools(vec!["delete_product".to_string()])
+            .await
+            .unwrap();
+        service.set_disabled_tools(vec![]).await.unwrap();
+        assert_eq!(service.active_tools().await.unwrap().len(), service.tools().len());
+    }
 
     #[test]
     fn fmt_ts_epoch() {

@@ -90,3 +90,4 @@ export type { PendingApprovalResponse } from './generated/PendingApprovalRespons
 export type { ApprovalDecideRequest } from './generated/ApprovalDecideRequest';
 export type { ApprovalModeRequest } from './generated/ApprovalModeRequest';
 export type { ApprovalModeResponse } from './generated/ApprovalModeResponse';
+export type { ToolAvailabilityRequest } from './generated/ToolAvailabilityRequest';
