@@ -79,3 +79,6 @@ export type { ProductBatchDeleteIdsRequest } from './generated/ProductBatchDelet
 export type { ProductBatchDeletePreviewResponse } from './generated/ProductBatchDeletePreviewResponse';
 export type { ProductBatchDeleteResponse } from './generated/ProductBatchDeleteResponse';
 export type { TestConnectionResponse } from './generated/TestConnectionResponse';
+export type { AiChatRequest } from './generated/AiChatRequest';
+export type { AiChatResponse } from './generated/AiChatResponse';
+export type { AiToolInfoResponse } from './generated/AiToolInfoResponse';

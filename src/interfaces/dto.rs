@@ -604,6 +604,31 @@ pub struct AiToolCallPurgeResponse {
     pub deleted: u64,
 }
 
+/// 通用管理助手聊天请求
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct AiChatRequest {
+    pub message: String,
+}
+
+/// 通用管理助手聊天响应
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AiChatResponse {
+    pub reply: String,
+}
+
+/// 单个 AI 工具的清单（供外部智能体发现能力）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AiToolInfoResponse {
+    pub name: String,
+    pub description: String,
+    /// 参数的 JSON Schema
+    #[ts(type = "any")]
+    pub parameters: serde_json::Value,
+}
+
 /// 统一 API 响应结构（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T: Serialize> {

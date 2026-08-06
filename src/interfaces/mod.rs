@@ -17,6 +17,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
+use crate::application::ai::admin_tools::AdminToolsService;
 use crate::application::ai::classify_service::ClassifyService;
 use crate::application::ai_provider_service::AiProviderService;
 use crate::application::ai_settings_service::AiSettingsService;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub ai_settings_service: Arc<AiSettingsService>,
     pub ai_tool_call_service: Arc<AiToolCallService>,
     pub classify_service: Arc<ClassifyService>,
+    pub admin_tools_service: Arc<AdminToolsService>,
     pub stats_service: Arc<StatsService>,
     pub trend_service: Arc<TrendService>,
 }
@@ -160,6 +162,8 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route("/ai/classify-tasks", post(ai_handler::create_classify_task))
         .route("/ai/classify-tasks/{id}", get(ai_handler::get_classify_task))
         .route("/ai/classify-tasks/{id}/cancel", post(ai_handler::cancel_classify_task))
+        .route("/ai/tools", get(ai_handler::list_admin_tools))
+        .route("/ai/chat", post(ai_handler::ai_chat))
         .with_state(state);
 
     Router::new()

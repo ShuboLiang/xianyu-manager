@@ -7,11 +7,12 @@ use crate::application::ai_provider_service::AiProviderPatch;
 use crate::application::ai_tool_call_service::PurgeCriteria;
 
 use super::dto::{
-    AiProviderCreateRequest, AiProviderResponse, AiProviderUpdateRequest, AiStatusResponse,
-    AiToolCallListQuery, AiToolCallPurgePreviewResponse, AiToolCallPurgeRequest,
-    AiToolCallPurgeResponse, AiToolCallResponse, ApiResponse, ClassifyProductsRequest,
-    ClassifyProductsResponse, ClassifyTaskResponse, CrawlModeResponse, CrawlPromptRequest,
-    CrawlPromptResponse, PageResponse, TestConnectionResponse, UpdateCrawlModeRequest,
+    AiChatRequest, AiChatResponse, AiProviderCreateRequest, AiProviderResponse,
+    AiProviderUpdateRequest, AiStatusResponse, AiToolCallListQuery, AiToolCallPurgePreviewResponse,
+    AiToolCallPurgeRequest, AiToolCallPurgeResponse, AiToolCallResponse, AiToolInfoResponse,
+    ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse, ClassifyTaskResponse,
+    CrawlModeResponse, CrawlPromptRequest, CrawlPromptResponse, PageResponse, TestConnectionResponse,
+    UpdateCrawlModeRequest,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -269,6 +270,31 @@ pub async fn cancel_classify_task(
 ) -> Json<ApiResponse<ClassifyTaskResponse>> {
     match state.classify_service.cancel_classify_task(&id).await {
         Ok(task) => Json(ApiResponse::ok(task.into())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/ai/tools：当前可用的 AI 工具清单（名称/描述/参数 Schema），供外部智能体发现能力
+pub async fn list_admin_tools(State(state): State<AppState>) -> Json<ApiResponse<Vec<AiToolInfoResponse>>> {
+    let manifest = state.admin_tools_service.tool_manifest();
+    let infos: Vec<AiToolInfoResponse> = manifest
+        .into_iter()
+        .map(|m| AiToolInfoResponse {
+            name: m.name,
+            description: m.description,
+            parameters: m.parameters,
+        })
+        .collect();
+    Json(ApiResponse::ok(infos))
+}
+
+/// POST /api/ai/chat：通用管理助手，接收自然语言指令，AI 自主调用工具完成查询/操作
+pub async fn ai_chat(
+    State(state): State<AppState>,
+    Json(req): Json<AiChatRequest>,
+) -> Json<ApiResponse<AiChatResponse>> {
+    match state.admin_tools_service.chat(&req.message).await {
+        Ok(reply) => Json(ApiResponse::ok(AiChatResponse { reply })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

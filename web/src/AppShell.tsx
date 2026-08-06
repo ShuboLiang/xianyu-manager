@@ -14,6 +14,7 @@ import {
   DashboardOutlined,
   InboxOutlined,
   LineChartOutlined,
+  MessageOutlined,
   MoonOutlined,
   RobotOutlined,
   ShoppingOutlined,
@@ -35,6 +36,7 @@ const NAV_ITEMS = [
   { key: '/items', icon: <InboxOutlined />, label: '抓取数据' },
   { key: '/trends', icon: <LineChartOutlined />, label: '价格趋势' },
   { type: 'divider' as const },
+  { key: '/assistant', icon: <MessageOutlined />, label: 'AI 助手' },
   { key: '/ai', icon: <RobotOutlined />, label: 'AI 配置' },
 ];
 

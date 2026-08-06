@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { AppShell } from '@/AppShell';
 import { ThemeModeContext, type ThemeMode } from '@/lib/theme-mode';
+import { AiAssistantPage } from '@/pages/AiAssistantPage';
 import { AiPage } from '@/pages/AiPage';
 import { ItemsPage } from '@/pages/ItemsPage';
 import { OverviewPage } from '@/pages/OverviewPage';
@@ -73,6 +74,7 @@ export default function App() {
                   <Route path="tags" element={<TagsPage />} />
                   <Route path="items" element={<ItemsPage />} />
                   <Route path="trends" element={<TrendsPage />} />
+                  <Route path="assistant" element={<AiAssistantPage />} />
                   <Route path="ai" element={<AiPage />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Route>

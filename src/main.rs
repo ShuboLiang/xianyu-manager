@@ -7,6 +7,7 @@ mod interfaces;
 
 use std::sync::Arc;
 
+use application::ai::admin_tools::AdminToolsService;
 use application::ai::classify_service::ClassifyService;
 use application::ai::crawl_agent_service::CrawlAgentService;
 use application::ai::crawl_direct_service::CrawlDirectService;
@@ -121,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
     // GATEWAY=webbridge 时，队列条目由 AI 抓取（搜索 → 筛选 → 统计落库）。
     // 两种实现同时构造，SwitchableCrawler 每次抓取读 app_settings 的 ai_crawl_mode
     // （DB 设置 > AI_CRAWL_MODE 环境变量兜底）决定走哪条，前端切换后下一轮生效。
+    let ai_gateway_for_admin = ai_gateway.clone();
     let crawler: Option<Arc<dyn crate::application::ai::crawl_shared::ProductCrawler>> =
         webbridge.map(|client| {
             let direct = Arc::new(CrawlDirectService::new(
@@ -165,6 +167,16 @@ async fn main() -> anyhow::Result<()> {
 
     let stats_service = Arc::new(StatsService::new(item_repo, product_repo));
 
+    let admin_tools_service = Arc::new(AdminToolsService::new(
+        product_service.clone(),
+        tag_service.clone(),
+        item_service.clone(),
+        queue_service.clone(),
+        stats_service.clone(),
+        trend_service.clone(),
+        ai_gateway_for_admin,
+    ));
+
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
 
@@ -180,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
             ai_settings_service,
             ai_tool_call_service,
             classify_service,
+            admin_tools_service,
             stats_service,
             trend_service,
         },

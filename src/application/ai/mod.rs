@@ -6,6 +6,7 @@
 //! - crawl_direct_service：单轮调用路径（AI_CRAWL_MODE=direct，默认，省 token）
 //! - crawl_shared：两种路径共享的 ProductCrawler 端口、CrawlOutcome 与统计落库逻辑
 
+pub mod admin_tools;
 pub mod classify_service;
 pub mod crawl_agent_service;
 pub mod crawl_direct_service;
