@@ -189,6 +189,41 @@ fn clamp_page(page: Option<u64>, page_size: Option<u64>) -> (u64, u64) {
     )
 }
 
+/// Unix 秒 → 可读时间「YYYY-MM-DD HH:MM」。不引入 chrono，用 civil-from-days 算法
+/// 手动转换（UTC）。返回的 `*_time` 字段就是给 AI 看的，避免它复述原始时间戳。
+fn fmt_ts(ts: u64) -> String {
+    // days = 1970-01-01 以来的天数
+    let days = (ts / 86400) as i64;
+    let secs_of_day = (ts % 86400) as i64;
+    let (hour, minute) = (secs_of_day / 3600, (secs_of_day % 3600) / 60);
+
+    // Howard Hinnant civil_from_days：天数 → (年, 月, 日)
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}",
+        y = y,
+        m = m,
+        d = d,
+        hour = hour,
+        minute = minute
+    )
+}
+
+/// 可读时间字段：`opt_time` 返回 Option 时对应的可读字符串；None → null
+fn fmt_opt_ts(ts: Option<u64>) -> Option<String> {
+    ts.map(fmt_ts)
+}
+
 fn product_to_json(p: &Product, tag_names: &HashMap<i64, String>) -> JsonValue {
     json!({
         "id": p.id,
@@ -200,7 +235,7 @@ fn product_to_json(p: &Product, tag_names: &HashMap<i64, String>) -> JsonValue {
         "avg_price": p.avg_price,
         "mode_price": p.mode_price,
         "crawled_count": p.crawled_count,
-        "last_crawled_at": p.last_crawled_at,
+        "last_crawled_time": fmt_opt_ts(p.last_crawled_at),
         "recycle_price": p.recycle_price,
     })
 }
@@ -226,8 +261,8 @@ fn queue_to_json(p: &QueueProgress) -> JsonValue {
         "done": p.done,
         "failed": p.failed,
         "skipped": p.skipped,
-        "created_at": p.queue.created_at,
-        "finished_at": p.queue.finished_at,
+        "created_time": fmt_ts(p.queue.created_at),
+        "finished_time": fmt_opt_ts(p.queue.finished_at),
     })
 }
 
@@ -238,7 +273,7 @@ fn item_to_json(it: &Item, product_names: &HashMap<i64, String>) -> JsonValue {
         "price": it.price,
         "seller": it.seller,
         "url": it.url,
-        "crawled_at": it.crawled_at,
+        "crawled_time": fmt_ts(it.crawled_at),
         "product_id": it.product_id,
         "product_name": it.product_id.and_then(|pid| product_names.get(&pid)).cloned(),
     })
@@ -264,7 +299,7 @@ impl AiTool for ListProductsTool {
     }
 
     fn description(&self) -> &str {
-        "分页查询待爬取商品列表。支持按名称模糊搜索（search）、按标签过滤（tag_id）、按字段排序（sort_by=median_price/avg_price/mode_price/crawled_count/last_crawled_at/recycle_price，sort_dir=asc/desc）。返回 total 与每页最多 page_size 条商品（含标签名与价格统计）。"
+        "分页查询待爬取商品列表。支持按名称模糊搜索（search）、按标签过滤（tag_id）、按字段排序（sort_by=median_price/avg_price/mode_price/crawled_count/last_crawled_at/recycle_price，sort_dir=asc/desc）。返回 total 与每页最多 page_size 条商品（含标签名与价格统计）。时间字段是 last_crawled_time（人类可读，如「2024-05-20 08:30」）。"
     }
 
     fn parameters_schema(&self) -> JsonValue {
@@ -697,7 +732,7 @@ impl AiTool for ListItemsTool {
     }
 
     fn description(&self) -> &str {
-        "分页查询已抓取的闲鱼商品记录（按抓取时间倒序）。支持按标题/商品名模糊搜索（search）、按标签过滤（tag_id）。返回 total 与每页最多 page_size 条记录（含价格、卖家、链接、所属商品）。"
+        "分页查询已抓取的闲鱼商品记录（按抓取时间倒序）。支持按标题/商品名模糊搜索（search）、按标签过滤（tag_id）。返回 total 与每页最多 page_size 条记录（含价格、卖家、链接、所属商品）。时间字段是 crawled_time（人类可读，如「2024-05-20 08:30」）。"
     }
 
     fn parameters_schema(&self) -> JsonValue {
@@ -748,7 +783,7 @@ impl AiTool for GetStatsTool {
     }
 
     fn description(&self) -> &str {
-        "查询后台 KPI 概览统计：商品总数、近 24 小时抓取数量、最后爬取时间。"
+        "查询后台 KPI 概览统计：商品总数、近 24 小时抓取数量、最后爬取时间。时间字段是 last_crawled_time（人类可读，如「2024-05-20 08:30」）。"
     }
 
     fn parameters_schema(&self) -> JsonValue {
@@ -760,7 +795,7 @@ impl AiTool for GetStatsTool {
         Ok(json!({
             "product_count": s.product_count,
             "crawled_today": s.crawled_today,
-            "last_crawled_at": s.last_crawled_at,
+            "last_crawled_time": fmt_opt_ts(s.last_crawled_at),
         }))
     }
 }
@@ -981,7 +1016,7 @@ impl AiTool for GetPriceTrendTool {
     }
 
     fn description(&self) -> &str {
-        "查询一个或多个商品的价格趋势：product_ids 传商品 id 列表，返回每个商品按抓取批次聚合的价格点（中位数/最低/最高/均价/样本数）。"
+        "查询一个或多个商品的价格趋势：product_ids 传商品 id 列表，返回每个商品按抓取批次聚合的价格点（中位数/最低/最高/均价/样本数）。每点时间字段是 crawled_time（人类可读，如「2024-05-20 08:30」）。"
     }
 
     fn parameters_schema(&self) -> JsonValue {
@@ -1003,7 +1038,7 @@ impl AiTool for GetPriceTrendTool {
                 "product_id": s.product_id,
                 "product_name": s.product_name,
                 "points": s.points.iter().map(|p| json!({
-                    "crawled_at": p.crawled_at,
+                    "crawled_time": fmt_ts(p.crawled_at),
                     "median_price": p.median_price,
                     "min_price": p.min_price,
                     "max_price": p.max_price,
@@ -1071,4 +1106,32 @@ fn build_history_prompt(user: &str, history: &[(String, String)]) -> String {
     }
     parts.push(format!("当前问题：\n{user}"));
     parts.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmt_ts;
+
+    #[test]
+    fn fmt_ts_epoch() {
+        assert_eq!(fmt_ts(0), "1970-01-01 00:00");
+    }
+
+    #[test]
+    fn fmt_ts_known_time() {
+        // 2024-05-20 08:30:00 UTC
+        assert_eq!(fmt_ts(1716193800), "2024-05-20 08:30");
+    }
+
+    #[test]
+    fn fmt_ts_leap_year() {
+        // 2024-02-29 12:00:00 UTC（闰年）
+        assert_eq!(fmt_ts(1709208000), "2024-02-29 12:00");
+    }
+
+    #[test]
+    fn fmt_ts_year_boundary() {
+        // 2023-12-31 23:59:00 UTC
+        assert_eq!(fmt_ts(1704067140), "2023-12-31 23:59");
+    }
 }
