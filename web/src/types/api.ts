@@ -86,3 +86,7 @@ export type { ConversationResponse } from './generated/ConversationResponse';
 export type { ConversationMessageResponse } from './generated/ConversationMessageResponse';
 export type { ConversationDetailResponse } from './generated/ConversationDetailResponse';
 export type { RenameConversationRequest } from './generated/RenameConversationRequest';
+export type { PendingApprovalResponse } from './generated/PendingApprovalResponse';
+export type { ApprovalDecideRequest } from './generated/ApprovalDecideRequest';
+export type { ApprovalModeRequest } from './generated/ApprovalModeRequest';
+export type { ApprovalModeResponse } from './generated/ApprovalModeResponse';

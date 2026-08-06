@@ -56,6 +56,8 @@ pub trait AiGateway: Send + Sync {
     /// 实现方负责「模型请求工具 → 执行 → 结果回填 → 再调用」的循环，
     /// 直到模型给出最终答案；max_rounds 封顶防工具调用死循环。
     /// source 标记本次 agent 归属（ai_tool_call::source 常量），写入审计记录。
+    /// approval 为写工具确认闸口：Some 时写工具（is_write()=true）先经人工确认再执行；
+    /// None（抓取/打标签等无人值守流程）时写工具直接执行，不弹确认。
     async fn run_agent(
         &self,
         system: &str,
@@ -63,6 +65,7 @@ pub trait AiGateway: Send + Sync {
         tools: &[Arc<dyn AiTool>],
         max_rounds: u32,
         source: &str,
+        approval: Option<Arc<dyn ToolApproval>>,
     ) -> Result<String, DomainError>;
 
     /// 用指定配置做连通性测试（不经过默认配置解析）
@@ -84,4 +87,18 @@ pub trait AiTool: Send + Sync {
     /// 参数的 JSON Schema
     fn parameters_schema(&self) -> serde_json::Value;
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, DomainError>;
+    /// 是否为写操作（会真实改库）。默认 false；写工具实现覆盖为 true，
+    /// AI 助手在「正常模式」下执行写工具前会先征求用户同意。
+    fn is_write(&self) -> bool {
+        false
+    }
+}
+
+/// 写工具执行前的人工确认闸口（应用层定义，infra 的 run_agent 在执行写工具前调用）。
+/// 每个会话一个实例：yolo 模式自动放行；「允许本次」放行一次；「该对话全部允许」放行该工具；
+/// 其余情况创建待确认审批并阻塞等待用户决策，直到前端提交决策（或超时自动拒绝）。
+#[async_trait]
+pub trait ToolApproval: Send + Sync {
+    /// 返回 true=放行执行，false=拒绝（拒绝结果作为工具错误回填给模型）
+    async fn check(&self, tool_name: &str, arguments: &str) -> Result<bool, DomainError>;
 }

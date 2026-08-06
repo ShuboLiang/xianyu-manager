@@ -13,6 +13,7 @@ use application::ai::classify_service::ClassifyService;
 use application::ai::crawl_agent_service::CrawlAgentService;
 use application::ai::crawl_direct_service::CrawlDirectService;
 use application::ai::crawl_switch::SwitchableCrawler;
+use application::ai::tool_approval::ToolApprovalRegistry;
 use application::ai_provider_service::AiProviderService;
 use application::ai_settings_service::AiSettingsService;
 use application::ai_tool_call_service::AiToolCallService;
@@ -169,6 +170,9 @@ async fn main() -> anyhow::Result<()> {
 
     let stats_service = Arc::new(StatsService::new(item_repo, product_repo));
 
+    // 写操作确认闸口：AI 助手会话的 yolo/normal 模式与待确认审批（进程内存态）
+    let tool_approval = ToolApprovalRegistry::new();
+
     let admin_tools_service = Arc::new(AdminToolsService::new(
         product_service.clone(),
         tag_service.clone(),
@@ -177,10 +181,12 @@ async fn main() -> anyhow::Result<()> {
         stats_service.clone(),
         trend_service.clone(),
         ai_gateway_for_admin,
+        tool_approval.clone(),
     ));
     let chat_session_service = Arc::new(ChatSessionService::new(
         conversation_repo,
         admin_tools_service.clone(),
+        tool_approval.clone(),
     ));
 
     // 启动恢复 + 拉起全局抓取 worker
@@ -200,6 +206,7 @@ async fn main() -> anyhow::Result<()> {
             classify_service,
             admin_tools_service,
             chat_session_service,
+            tool_approval: Arc::new(tool_approval),
             stats_service,
             trend_service,
         },

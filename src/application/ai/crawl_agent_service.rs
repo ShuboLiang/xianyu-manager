@@ -118,7 +118,7 @@ impl CrawlAgentService {
         tracing::trace!("AI agent system prompt: {}", system);
         tracing::trace!("AI agent user prompt: {}", user);
 
-        self.ai.run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CRAWL).await?;
+        self.ai.run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CRAWL, None).await?;
 
         let taken = outcome.lock().expect("outcome 锁中毒").take();
         match &taken {

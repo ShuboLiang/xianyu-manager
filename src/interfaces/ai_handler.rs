@@ -3,6 +3,7 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
 
+use crate::application::ai::tool_approval::{ApprovalDecision, ApprovalMode};
 use crate::application::ai_provider_service::AiProviderPatch;
 use crate::application::ai_tool_call_service::PurgeCriteria;
 
@@ -10,10 +11,12 @@ use super::dto::{
     AiChatRequest, AiChatResponse, AiProviderCreateRequest, AiProviderResponse,
     AiProviderUpdateRequest, AiStatusResponse, AiToolCallListQuery, AiToolCallPurgePreviewResponse,
     AiToolCallPurgeRequest, AiToolCallPurgeResponse, AiToolCallResponse, AiToolInfoResponse,
-    ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse, ClassifyTaskResponse,
+    ApiResponse, ApprovalDecideRequest, ApprovalModeRequest, ApprovalModeResponse,
+    ClassifyProductsRequest, ClassifyProductsResponse, ClassifyTaskResponse,
     ConversationDetailResponse, ConversationMessageResponse, ConversationResponse,
     CrawlModeResponse, CrawlPromptRequest, CrawlPromptResponse, PageResponse,
-    RenameConversationRequest, TestConnectionResponse, UpdateCrawlModeRequest,
+    PendingApprovalQuery, PendingApprovalResponse, RenameConversationRequest,
+    TestConnectionResponse, UpdateCrawlModeRequest,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -305,11 +308,18 @@ pub async fn list_conversations(
     State(state): State<AppState>,
 ) -> Json<ApiResponse<Vec<ConversationResponse>>> {
     match state.chat_session_service.list_with_counts().await {
-        Ok(list) => Json(ApiResponse::ok(
-            list.into_iter()
-                .map(|(c, count)| ConversationResponse::from_conversation(c, count))
-                .collect(),
-        )),
+        Ok(list) => {
+            let mut resp = Vec::with_capacity(list.len());
+            for (c, count) in list {
+                let mode = state.tool_approval.get_mode(c.id).await;
+                resp.push(ConversationResponse::from_conversation(
+                    c,
+                    count,
+                    mode.as_str().to_string(),
+                ));
+            }
+            Json(ApiResponse::ok(resp))
+        }
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }
@@ -319,7 +329,14 @@ pub async fn create_conversation(
     State(state): State<AppState>,
 ) -> Json<ApiResponse<ConversationResponse>> {
     match state.chat_session_service.create().await {
-        Ok(c) => Json(ApiResponse::ok(ConversationResponse::from_conversation(c, 0))),
+        Ok(c) => {
+            let mode = state.tool_approval.get_mode(c.id).await;
+            Json(ApiResponse::ok(ConversationResponse::from_conversation(
+                c,
+                0,
+                mode.as_str().to_string(),
+            )))
+        }
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }
@@ -330,10 +347,17 @@ pub async fn get_conversation(
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<ConversationDetailResponse>> {
     match state.chat_session_service.get(id).await {
-        Ok((conversation, messages)) => Json(ApiResponse::ok(ConversationDetailResponse {
-            conversation: ConversationResponse::from_conversation(conversation, messages.len() as u64),
-            messages: messages.into_iter().map(Into::into).collect(),
-        })),
+        Ok((conversation, messages)) => {
+            let mode = state.tool_approval.get_mode(conversation.id).await;
+            Json(ApiResponse::ok(ConversationDetailResponse {
+                conversation: ConversationResponse::from_conversation(
+                    conversation,
+                    messages.len() as u64,
+                    mode.as_str().to_string(),
+                ),
+                messages: messages.into_iter().map(Into::into).collect(),
+            }))
+        }
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }
@@ -347,7 +371,12 @@ pub async fn rename_conversation(
     match state.chat_session_service.rename(id, req.title).await {
         Ok(c) => {
             let count = state.chat_session_service.message_count(c.id).await.unwrap_or(0);
-            Json(ApiResponse::ok(ConversationResponse::from_conversation(c, count)))
+            let mode = state.tool_approval.get_mode(c.id).await;
+            Json(ApiResponse::ok(ConversationResponse::from_conversation(
+                c,
+                count,
+                mode.as_str().to_string(),
+            )))
         }
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
@@ -382,6 +411,67 @@ pub async fn clear_conversation_messages(
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
     match state.chat_session_service.clear(id).await {
+        Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// PUT /api/ai/chat/sessions/{id}/mode：切换会话写操作确认模式（normal / yolo）
+pub async fn set_conversation_mode(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<ApprovalModeRequest>,
+) -> Json<ApiResponse<ApprovalModeResponse>> {
+    let mode = match ApprovalMode::from_str(&req.mode) {
+        Some(m) => m,
+        None => {
+            return Json(ApiResponse::err(
+                "mode 必须是 normal 或 yolo".to_string(),
+            ))
+        }
+    };
+    state.tool_approval.set_mode(id, mode).await;
+    tracing::info!("AI 助手会话 #{id} 切换为 {} 模式", mode.as_str());
+    Json(ApiResponse::ok(ApprovalModeResponse {
+        mode: mode.as_str().to_string(),
+    }))
+}
+
+/// GET /api/ai/approvals/pending?conversation_id={id}：某会话待用户确认的写操作审批
+pub async fn list_pending_approvals(
+    State(state): State<AppState>,
+    Query(q): Query<PendingApprovalQuery>,
+) -> Json<ApiResponse<Vec<PendingApprovalResponse>>> {
+    let pendings = state.tool_approval.list_pending(q.conversation_id).await;
+    Json(ApiResponse::ok(
+        pendings
+            .into_iter()
+            .map(|p| PendingApprovalResponse {
+                id: p.id,
+                conversation_id: p.conversation_id,
+                tool_name: p.tool_name,
+                arguments: p.arguments,
+                created_at: p.created_at,
+            })
+            .collect(),
+    ))
+}
+
+/// POST /api/ai/approvals/{id}/decide：用户对写操作审批作出决策（allow_once / allow_always / deny）
+pub async fn decide_approval(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(req): Json<ApprovalDecideRequest>,
+) -> Json<ApiResponse<()>> {
+    let decision = match ApprovalDecision::from_str(&req.decision) {
+        Some(d) => d,
+        None => {
+            return Json(ApiResponse::err(
+                "decision 必须是 allow_once / allow_always / deny 之一".to_string(),
+            ))
+        }
+    };
+    match state.tool_approval.decide(id, decision).await {
         Ok(()) => Json(ApiResponse::ok(())),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }

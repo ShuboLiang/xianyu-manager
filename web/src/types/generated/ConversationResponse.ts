@@ -7,4 +7,8 @@ export type ConversationResponse = { id: number, title: string,
 /**
  * 消息数（用于列表展示）
  */
-message_count: number, created_at: number, updated_at: number, };
+message_count: number, created_at: number, updated_at: number, 
+/**
+ * 写操作确认模式：normal（需确认）/ yolo（全部放行）
+ */
+mode: string, };

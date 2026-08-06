@@ -20,6 +20,7 @@ use tower_http::trace::TraceLayer;
 use crate::application::ai::admin_tools::AdminToolsService;
 use crate::application::ai::chat_session_service::ChatSessionService;
 use crate::application::ai::classify_service::ClassifyService;
+use crate::application::ai::tool_approval::ToolApprovalRegistry;
 use crate::application::ai_provider_service::AiProviderService;
 use crate::application::ai_settings_service::AiSettingsService;
 use crate::application::ai_tool_call_service::AiToolCallService;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub classify_service: Arc<ClassifyService>,
     pub admin_tools_service: Arc<AdminToolsService>,
     pub chat_session_service: Arc<ChatSessionService>,
+    /// 写操作确认闸口（会话模式 + 待确认审批，前端轮询/决策用）
+    pub tool_approval: Arc<ToolApprovalRegistry>,
     pub stats_service: Arc<StatsService>,
     pub trend_service: Arc<TrendService>,
 }
@@ -183,6 +186,12 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
             post(ai_handler::chat_in_conversation)
                 .delete(ai_handler::clear_conversation_messages),
         )
+        .route(
+            "/ai/chat/sessions/{id}/mode",
+            put(ai_handler::set_conversation_mode),
+        )
+        .route("/ai/approvals/pending", get(ai_handler::list_pending_approvals))
+        .route("/ai/approvals/{id}/decide", post(ai_handler::decide_approval))
         .with_state(state);
 
     Router::new()

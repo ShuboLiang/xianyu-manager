@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::application::ai::admin_tools::AdminToolsService;
+use crate::application::ai::tool_approval::ToolApprovalRegistry;
 use crate::domain::ai_conversation::{
     Conversation, ConversationMessage, MessageRole, NewConversationMessage,
 };
@@ -13,16 +14,20 @@ use crate::domain::repository::ConversationRepository;
 pub struct ChatSessionService {
     conversations: Arc<dyn ConversationRepository>,
     admin_tools: Arc<AdminToolsService>,
+    /// 写操作确认闸口（会话模式 + 待确认审批）
+    approval: ToolApprovalRegistry,
 }
 
 impl ChatSessionService {
     pub fn new(
         conversations: Arc<dyn ConversationRepository>,
         admin_tools: Arc<AdminToolsService>,
+        approval: ToolApprovalRegistry,
     ) -> Self {
         Self {
             conversations,
             admin_tools,
+            approval,
         }
     }
 
@@ -103,6 +108,9 @@ impl ChatSessionService {
             return Err(DomainError::InvalidInput("消息不能为空".into()));
         }
 
+        // 清掉本会话残留的待确认审批（上次请求中断遗留），避免卡住本轮轮询
+        self.approval.reset(id).await;
+
         let mut conversation = self
             .conversations
             .find_conversation(id)
@@ -131,10 +139,10 @@ impl ChatSessionService {
             self.conversations.update_conversation(&conversation).await?;
         }
 
-        // 跑 agent（带历史）
+        // 跑 agent（带历史；写工具经审批闸口征求用户同意）
         let reply = self
             .admin_tools
-            .chat_with_history(&message, &history_pairs)
+            .chat_with_history(id, &message, &history_pairs)
             .await?;
 
         // 落 AI 回复

@@ -9,6 +9,8 @@ import {
   Empty,
   Input,
   List,
+  Modal,
+  Segmented,
   Space,
   Spin,
   Tag,
@@ -24,6 +26,7 @@ import {
   PlusOutlined,
   RobotOutlined,
   SendOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -34,6 +37,7 @@ import type {
   AiToolInfoResponse,
   ConversationDetailResponse,
   ConversationResponse,
+  PendingApprovalResponse,
 } from '@/types/api';
 
 interface ChatMessage {
@@ -155,6 +159,10 @@ export function AiChat({ configured }: { configured: boolean }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [approval, setApproval] = useState<PendingApprovalResponse | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  // 模式本地乐观值（PUT 后由 sessions 查询回源）
+  const [localModes, setLocalModes] = useState<Record<number, 'normal' | 'yolo'>>({});
   const endRef = useRef<HTMLDivElement>(null);
 
   // 会话列表加载完成后：无激活则选最新（或第一个）
@@ -314,6 +322,68 @@ export function AiChat({ configured }: { configured: boolean }) {
   };
 
   const activeConversation = sessions.find((s) => s.id === activeId) ?? null;
+
+  const activeMode: 'normal' | 'yolo' =
+    localModes[activeId ?? -1] ?? (activeConversation?.mode as 'normal' | 'yolo') ?? 'normal';
+
+  // 发送期间轮询本会话的待确认审批：有写操作等待用户决策时弹框
+  useEffect(() => {
+    if (!loading || activeId === null) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const pendings = await apiGet<PendingApprovalResponse[]>(
+          `/api/ai/approvals/pending?conversation_id=${activeId}`,
+        );
+        if (cancelled) return;
+        if (pendings.length > 0) {
+          // 已有弹框时保持现状（等用户决策），无则展示第一条
+          setApproval((prev) => prev ?? pendings[0]);
+        }
+      } catch {
+        // 轮询失败忽略，下一轮再试
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [loading, activeId]);
+
+  // 发送结束后关闭可能残留的审批弹框
+  useEffect(() => {
+    if (!loading) setApproval(null);
+  }, [loading]);
+
+  const decideApproval = async (decision: 'allow_once' | 'allow_always' | 'deny') => {
+    if (!approval) return;
+    setDeciding(true);
+    try {
+      await apiPost(`/api/ai/approvals/${approval.id}/decide`, { decision });
+      if (decision === 'allow_always') {
+        toast.success('已记住：本会话内该工具不再询问');
+      }
+    } catch (e) {
+      toast.error(`决策提交失败: ${(e as Error).message}`);
+    } finally {
+      setDeciding(false);
+      setApproval(null);
+    }
+  };
+
+  const switchMode = async (mode: 'normal' | 'yolo') => {
+    if (activeId === null) return;
+    const prev = localModes[activeId] ?? (activeConversation?.mode as 'normal' | 'yolo') ?? 'normal';
+    setLocalModes((m) => ({ ...m, [activeId]: mode }));
+    try {
+      await apiPut(`/api/ai/chat/sessions/${activeId}/mode`, { mode });
+      refreshSessions();
+    } catch (e) {
+      toast.error(`切换模式失败: ${(e as Error).message}`);
+      setLocalModes((m) => ({ ...m, [activeId]: prev }));
+    }
+  };
 
   return (
     <div
@@ -567,7 +637,89 @@ export function AiChat({ configured }: { configured: boolean }) {
             发送
           </Button>
         </div>
+
+        {/* 底部：写操作确认模式切换（normal 需确认 / yolo 全部放行） */}
+        <div
+          style={{
+            padding: '5px 14px',
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <Segmented
+            size="small"
+            value={activeMode}
+            disabled={!configured || activeConversation === null}
+            options={[
+              { value: 'normal', label: '正常模式' },
+              { value: 'yolo', label: 'YOLO' },
+            ]}
+            onChange={(v) => switchMode(v as 'normal' | 'yolo')}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {activeMode === 'yolo'
+              ? '写操作不弹确认，全部自动放行'
+              : '写操作执行前征求你的同意'}
+          </Typography.Text>
+        </div>
       </div>
+
+      {/* 写操作确认弹框：允许本次 / 该对话全部允许 / 拒绝 */}
+      <Modal
+        open={approval !== null}
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        width={480}
+        title={
+          <Space>
+            <WarningOutlined style={{ color: token.colorWarning }} />
+            AI 助手想执行写操作
+          </Space>
+        }
+        footer={
+          <Space>
+            <Button danger loading={deciding} onClick={() => decideApproval('deny')}>
+              拒绝
+            </Button>
+            <Button loading={deciding} onClick={() => decideApproval('allow_once')}>
+              允许本次
+            </Button>
+            <Button type="primary" loading={deciding} onClick={() => decideApproval('allow_always')}>
+              该对话全部允许
+            </Button>
+          </Space>
+        }
+      >
+        <div style={{ marginBottom: 8 }}>
+          <Typography.Text strong style={{ fontSize: 13 }}>工具：</Typography.Text>
+          <Tag color={approval ? 'gold' : 'default'} style={{ marginInlineEnd: 0 }}>
+            {approval?.tool_name ?? ''}
+          </Tag>
+        </div>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>参数：</Typography.Text>
+        <pre
+          className="num"
+          style={{
+            margin: '4px 0 8px',
+            background: token.colorFillTertiary,
+            borderRadius: token.borderRadius,
+            padding: '8px 10px',
+            fontSize: 12,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+            maxHeight: 180,
+            overflowY: 'auto',
+          }}
+        >
+          {approval ? prettyJson(approval.arguments) : ''}
+        </pre>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+          该操作会真实修改后台数据；选择「该对话全部允许」后，本会话内此工具不再询问。
+        </Typography.Paragraph>
+      </Modal>
 
       {/* 可用工具清单抽屉 */}
       <Drawer title={`可用工具（${tools?.length ?? 0}）`} open={toolsOpen} onClose={() => setToolsOpen(false)} width={520}>
@@ -648,3 +800,12 @@ const WRITE_TOOLS = new Set([
   'resume_queue',
   'cancel_queue',
 ]);
+
+/** JSON 美化：能解析则缩进展示，否则原样输出 */
+function prettyJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}

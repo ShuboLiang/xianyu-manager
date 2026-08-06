@@ -15,7 +15,9 @@ use rig_core::message::{Message, ToolResult, ToolResultContent, UserContent};
 use rig_core::OneOrMany;
 use rig_core::providers::openai;
 
-use crate::application::ports::{AiCompletion, AiEnvFallback, AiGateway, AiTool, TokenUsage};
+use crate::application::ports::{
+    AiCompletion, AiEnvFallback, AiGateway, AiTool, TokenUsage, ToolApproval,
+};
 use crate::domain::ai_provider::{AiProvider, BaseUrl, ModelName, ProviderName};
 use crate::domain::ai_tool_call::NewAiToolCall;
 use crate::domain::error::DomainError;
@@ -162,14 +164,33 @@ fn to_token_usage(u: &rig_core::completion::Usage) -> Option<TokenUsage> {
     })
 }
 
-/// 执行单个工具并落审计日志；错误也会返回，让调用方决定是否回填给模型
+/// 执行单个工具并落审计日志；错误也会返回，让调用方决定是否回填给模型。
+/// approval 为写操作确认闸口：Some 且工具是写操作（is_write()=true）时，
+/// 执行前先征求用户同意（yolo 模式自动放行；拒绝返回 PermissionDenied 回填给模型）。
 #[allow(dead_code)]
 async fn execute_tool(
     calls: Arc<dyn AiToolCallRepository>,
+    approval: Option<&dyn ToolApproval>,
     tool: &Arc<dyn AiTool>,
     arguments: serde_json::Value,
     source: &str,
 ) -> Result<serde_json::Value, DomainError> {
+    if tool.is_write() {
+        if let Some(approval) = approval {
+            match approval.check(tool.name(), &arguments.to_string()).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::info!("用户拒绝了写操作「{}」", tool.name());
+                    return Err(DomainError::InvalidState(format!(
+                        "用户拒绝了「{}」操作，请不要执行，如实向用户说明",
+                        tool.name()
+                    )));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     tracing::debug!("执行工具 {}: args={}", tool.name(), arguments);
     let start = std::time::Instant::now();
     let result = tool.execute(arguments.clone()).await;
@@ -272,6 +293,7 @@ impl AiGateway for RigAiGateway {
         tools: &[Arc<dyn AiTool>],
         max_rounds: u32,
         source: &str,
+        approval: Option<Arc<dyn ToolApproval>>,
     ) -> Result<String, DomainError> {
         let provider = self.resolve_provider().await?;
         let client = Self::build_client(&provider)?;
@@ -385,7 +407,15 @@ impl AiGateway for RigAiGateway {
                         DomainError::InvalidState(format!("未知工具: {}", tc.function.name))
                     })?;
 
-                let tool_result = match execute_tool(self.calls.clone(), tool, tc.function.arguments, source).await {
+                let tool_result = match execute_tool(
+                    self.calls.clone(),
+                    approval.as_deref(),
+                    tool,
+                    tc.function.arguments,
+                    source,
+                )
+                .await
+                {
                     Ok(v) => {
                         tracing::trace!("工具 {} 执行结果: {}", tc.function.name, v);
                         ToolResultContent::json(v)
@@ -448,6 +478,7 @@ impl AiGateway for MockAiGateway {
         _tools: &[Arc<dyn AiTool>],
         _max_rounds: u32,
         _source: &str,
+        _approval: Option<Arc<dyn ToolApproval>>,
     ) -> Result<String, DomainError> {
         Ok("mock-agent".into())
     }
@@ -494,11 +525,11 @@ mod tests {
         let calls: Arc<dyn AiToolCallRepository> = Arc::new(SqliteAiToolCallRepository::new(pool));
 
         let echo: Arc<dyn AiTool> = Arc::new(EchoTool);
-        let res = execute_tool(calls.clone(), &echo, serde_json::json!({"x": 1}), "test").await;
+        let res = execute_tool(calls.clone(), None, &echo, serde_json::json!({"x": 1}), "test").await;
         assert!(res.is_ok());
 
         let fail: Arc<dyn AiTool> = Arc::new(FailTool);
-        let res = execute_tool(calls.clone(), &fail, serde_json::json!({}), "test").await;
+        let res = execute_tool(calls.clone(), None, &fail, serde_json::json!({}), "test").await;
         assert!(res.is_err());
 
         let logs = calls.list_paginated(0, 10, None, None, None).await.unwrap().items;

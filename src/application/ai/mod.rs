@@ -13,3 +13,4 @@ pub mod crawl_agent_service;
 pub mod crawl_direct_service;
 pub mod crawl_shared;
 pub mod crawl_switch;
+pub mod tool_approval;

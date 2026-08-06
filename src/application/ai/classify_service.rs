@@ -278,7 +278,7 @@ impl ClassifyService {
         let user = build_user_prompt(&product_infos);
         let output = self
             .ai_gateway
-            .run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CLASSIFY)
+            .run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CLASSIFY, None)
             .await?;
 
         // 模型光总结不调写工具 = 什么都没写入，按失败处理（设计文档 3.2）
@@ -471,7 +471,7 @@ impl ClassifyService {
                 }
                 return;
             }
-            result = self.ai_gateway.run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CLASSIFY) => {
+            result = self.ai_gateway.run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CLASSIFY, None) => {
                 result
             }
         };

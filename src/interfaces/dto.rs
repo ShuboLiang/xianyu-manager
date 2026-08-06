@@ -649,6 +649,8 @@ pub struct ConversationResponse {
     pub created_at: u64,
     #[ts(type = "number")]
     pub updated_at: u64,
+    /// 写操作确认模式：normal（需确认）/ yolo（全部放行）
+    pub mode: String,
 }
 
 /// AI 助手会话消息
@@ -679,14 +681,62 @@ pub struct RenameConversationRequest {
     pub title: String,
 }
 
+/// 待用户确认的写操作审批（前端弹框展示）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct PendingApprovalResponse {
+    #[ts(type = "number")]
+    pub id: u64,
+    #[ts(type = "number")]
+    pub conversation_id: i64,
+    pub tool_name: String,
+    /// 调用参数（JSON 字符串）
+    pub arguments: String,
+    #[ts(type = "number")]
+    pub created_at: u64,
+}
+
+/// 待确认审批查询：某会话的待确认审批
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct PendingApprovalQuery {
+    #[ts(type = "number")]
+    pub conversation_id: i64,
+}
+
+/// 用户对某条审批的决策
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ApprovalDecideRequest {
+    /// allow_once（允许本次）/ allow_always（该对话全部允许）/ deny（拒绝）
+    pub decision: String,
+}
+
+/// 会话确认模式切换请求
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ApprovalModeRequest {
+    /// normal / yolo
+    pub mode: String,
+}
+
+/// 会话确认模式响应
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ApprovalModeResponse {
+    /// normal / yolo
+    pub mode: String,
+}
+
 impl ConversationResponse {
-    pub fn from_conversation(c: Conversation, message_count: u64) -> Self {
+    pub fn from_conversation(c: Conversation, message_count: u64, mode: String) -> Self {
         Self {
             id: c.id,
             title: c.title,
             message_count,
             created_at: c.created_at,
             updated_at: c.updated_at,
+            mode,
         }
     }
 }

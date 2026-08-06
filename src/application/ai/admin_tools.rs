@@ -19,6 +19,7 @@ use crate::application::queue_service::{EnqueueTarget, QueueProgress, QueueServi
 use crate::application::stats_service::StatsService;
 use crate::application::tag_service::{TagPatch, TagService};
 use crate::application::trend_service::TrendService;
+use crate::application::ai::tool_approval::ToolApprovalRegistry;
 use crate::domain::ai_tool_call::source as ai_source;
 use crate::domain::crawl_queue::Selector;
 use crate::domain::error::DomainError;
@@ -51,6 +52,8 @@ pub struct AdminToolsService {
     stats: Arc<StatsService>,
     trend: Arc<TrendService>,
     ai_gateway: Arc<dyn AiGateway>,
+    /// 写操作确认闸口（会话模式 + 待确认审批）
+    approval: ToolApprovalRegistry,
 }
 
 impl AdminToolsService {
@@ -63,6 +66,7 @@ impl AdminToolsService {
         stats: Arc<StatsService>,
         trend: Arc<TrendService>,
         ai_gateway: Arc<dyn AiGateway>,
+        approval: ToolApprovalRegistry,
     ) -> Self {
         Self {
             products,
@@ -72,6 +76,7 @@ impl AdminToolsService {
             stats,
             trend,
             ai_gateway,
+            approval,
         }
     }
 
@@ -112,21 +117,23 @@ impl AdminToolsService {
             .collect()
     }
 
-    /// 跑一轮通用管理 agent：用户指令 + 全部工具
+    /// 跑一轮通用管理 agent：用户指令 + 全部工具（无会话上下文，写工具不弹确认）
     pub async fn chat(&self, user: &str) -> Result<String, DomainError> {
         if user.trim().is_empty() {
             return Err(DomainError::InvalidInput("消息不能为空".into()));
         }
         let tools = self.tools();
         self.ai_gateway
-            .run_agent(SYSTEM_PROMPT, user, &tools, MAX_ROUNDS, ai_source::ASSISTANT)
+            .run_agent(SYSTEM_PROMPT, user, &tools, MAX_ROUNDS, ai_source::ASSISTANT, None)
             .await
     }
 
     /// 带历史上下文的对话：历史（按时间正序的 (role, content)）拼进 user prompt，
-    /// 让 agent 感知之前的对话内容（会话系统用）。
+    /// 让 agent 感知之前的对话内容（会话系统用）。写工具（is_write()=true）执行前
+    /// 经 approval 闸口弹框征求用户同意（yolo 模式自动放行）。
     pub async fn chat_with_history(
         &self,
+        conversation_id: i64,
         user: &str,
         history: &[(String, String)],
     ) -> Result<String, DomainError> {
@@ -135,8 +142,9 @@ impl AdminToolsService {
         }
         let prompt = build_history_prompt(user, history);
         let tools = self.tools();
+        let approval = self.approval.handle(conversation_id);
         self.ai_gateway
-            .run_agent(SYSTEM_PROMPT, &prompt, &tools, MAX_ROUNDS, ai_source::ASSISTANT)
+            .run_agent(SYSTEM_PROMPT, &prompt, &tools, MAX_ROUNDS, ai_source::ASSISTANT, Some(approval))
             .await
     }
 }
@@ -396,6 +404,10 @@ impl AiTool for CreateProductTool {
         "create_product"
     }
 
+    fn is_write(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "创建待爬取商品。name 必填（全局唯一，重复会报错），tag_ids 可填标签 id 列表（必须来自 list_tags），remark 可选备注。返回创建后的商品信息。"
     }
@@ -436,6 +448,10 @@ impl UpdateProductTool {
 impl AiTool for UpdateProductTool {
     fn name(&self) -> &str {
         "update_product"
+    }
+
+    fn is_write(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -494,6 +510,10 @@ impl AiTool for DeleteProductTool {
         "delete_product"
     }
 
+    fn is_write(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "删除商品（破坏性操作，删除前请先用 get_product 确认）。删除后该商品的抓取历史保留但解除归属。返回删除是否成功。"
     }
@@ -529,6 +549,10 @@ impl BatchCreateProductsTool {
 impl AiTool for BatchCreateProductsTool {
     fn name(&self) -> &str {
         "batch_create_products"
+    }
+
+    fn is_write(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -609,6 +633,10 @@ impl AiTool for CreateTagTool {
         "create_tag"
     }
 
+    fn is_write(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "创建商品标签。name 必填（全局唯一），remark 可选备注。新标签默认启用。返回创建后的标签。"
     }
@@ -645,6 +673,10 @@ impl UpdateTagTool {
 impl AiTool for UpdateTagTool {
     fn name(&self) -> &str {
         "update_tag"
+    }
+
+    fn is_write(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -690,6 +722,10 @@ impl DeleteTagTool {
 impl AiTool for DeleteTagTool {
     fn name(&self) -> &str {
         "delete_tag"
+    }
+
+    fn is_write(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -889,6 +925,10 @@ impl AiTool for EnqueueTool {
         "enqueue"
     }
 
+    fn is_write(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "创建抓取队列并开始抓取。入队目标二选一：selector（按标签圈选：tag_all=必须全部包含，tag_any=至少包含其一，tag_exclude=排除，stale_days=距今未爬天数）或 product_ids（商品 id 列表）。interval_secs 为条间间隔（秒，默认 3）。已在队列中的商品会自动跳过。返回队列 id、状态、新增与跳过商品数。"
     }
@@ -963,6 +1003,10 @@ impl QueueActionTool {
 impl AiTool for QueueActionTool {
     fn name(&self) -> &str {
         self.action_name()
+    }
+
+    fn is_write(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
