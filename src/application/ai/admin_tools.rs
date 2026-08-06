@@ -121,6 +121,23 @@ impl AdminToolsService {
             .run_agent(SYSTEM_PROMPT, user, &tools, MAX_ROUNDS)
             .await
     }
+
+    /// 带历史上下文的对话：历史（按时间正序的 (role, content)）拼进 user prompt，
+    /// 让 agent 感知之前的对话内容（会话系统用）。
+    pub async fn chat_with_history(
+        &self,
+        user: &str,
+        history: &[(String, String)],
+    ) -> Result<String, DomainError> {
+        if user.trim().is_empty() {
+            return Err(DomainError::InvalidInput("消息不能为空".into()));
+        }
+        let prompt = build_history_prompt(user, history);
+        let tools = self.tools();
+        self.ai_gateway
+            .run_agent(SYSTEM_PROMPT, &prompt, &tools, MAX_ROUNDS)
+            .await
+    }
 }
 
 /// 工具清单条目（供接口层组装 /api/ai/tools 响应）
@@ -1029,4 +1046,29 @@ fn selector_from_json(v: &JsonValue) -> Selector {
         tag_exclude: arg_i64_array(v, "tag_exclude").unwrap_or_default(),
         stale_days: arg_u64(v, "stale_days").map(|n| n as u32),
     }
+}
+
+/// 把历史对话拼进 user prompt（按时间正序的 (role, content) 列表）。
+/// 上限 20 条，超出只保留最近的；每条截断到 500 字符，防止上下文过大。
+fn build_history_prompt(user: &str, history: &[(String, String)]) -> String {
+    let recent: Vec<&(String, String)> = history
+        .iter()
+        .rev()
+        .take(20)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    let mut parts: Vec<String> = Vec::new();
+    if !recent.is_empty() {
+        parts.push("以下是本次会话的最近对话历史（供参考，不要复述，直接回答当前问题）：".to_string());
+        for (role, content) in recent {
+            let who = if role == "user" { "用户" } else { "助手" };
+            let content: String = content.chars().take(500).collect();
+            parts.push(format!("{who}：{content}"));
+        }
+    }
+    parts.push(format!("当前问题：\n{user}"));
+    parts.join("\n")
 }

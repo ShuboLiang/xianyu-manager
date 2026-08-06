@@ -8,6 +8,7 @@ mod interfaces;
 use std::sync::Arc;
 
 use application::ai::admin_tools::AdminToolsService;
+use application::ai::chat_session_service::ChatSessionService;
 use application::ai::classify_service::ClassifyService;
 use application::ai::crawl_agent_service::CrawlAgentService;
 use application::ai::crawl_direct_service::CrawlDirectService;
@@ -28,9 +29,9 @@ use infrastructure::persistence::memory::{
     InMemoryAiClassifyTaskRepository, InMemoryCrawlTaskRepository,
 };
 use infrastructure::persistence::sqlite::{
-    self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteItemRepository,
-    SqliteProductRepository, SqliteQueueRepository, SqliteSettingsRepository,
-    SqliteTagRepository,
+    self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteConversationRepository,
+    SqliteItemRepository, SqliteProductRepository, SqliteQueueRepository,
+    SqliteSettingsRepository, SqliteTagRepository,
 };
 use infrastructure::webbridge_client::{launch_webbridge_daemon, WebBridgeClient};
 use infrastructure::xianyu_gateway::{HttpXianYuGateway, MockXianYuGateway};
@@ -57,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let queue_repo = Arc::new(SqliteQueueRepository::new(pool.clone()));
     let ai_provider_repo = Arc::new(SqliteAiProviderRepository::new(pool.clone()));
     let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool.clone()));
+    let conversation_repo = Arc::new(SqliteConversationRepository::new(pool.clone()));
     let settings_repo = Arc::new(SqliteSettingsRepository::new(pool));
     // GATEWAY=webbridge：真实抓取走 WebBridge 浏览器（同时作为普通网关供 CrawlService 取原始候选）
     if config.gateway == "webbridge" {
@@ -176,6 +178,10 @@ async fn main() -> anyhow::Result<()> {
         trend_service.clone(),
         ai_gateway_for_admin,
     ));
+    let chat_session_service = Arc::new(ChatSessionService::new(
+        conversation_repo,
+        admin_tools_service.clone(),
+    ));
 
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
@@ -193,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
             ai_tool_call_service,
             classify_service,
             admin_tools_service,
+            chat_session_service,
             stats_service,
             trend_service,
         },

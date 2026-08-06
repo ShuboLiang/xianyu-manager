@@ -51,7 +51,7 @@ src/
 │   ├── tag_handler.rs   #   GET/POST /api/tags、GET/PUT/DELETE /api/tags/{id}
 │   ├── product_handler.rs#  GET/POST /api/products（列表分页 + 服务端排序）、GET/PUT/DELETE /api/products/{id}、GET /api/products/{id}/latest-items（最后一轮抓取明细）、GET /api/products/price-trend（趋势图）、GET /api/products/export（xlsx 导出）、POST /api/products/batch（批量导入）、POST /api/products/batch-delete(/preview)（按标签批删）
 │   ├── queue_handler.rs #   /api/queues 系列：预览、入队、暂停/恢复/取消、全部暂停/恢复、追加条目、改名、历史清理 purge
-│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页 + 工具名/成败筛选、保留期清理 purge）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、GET/PUT /api/ai/crawl-mode（抓取模式切换）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）、GET /api/ai/tools（管理 Agent 工具清单）、POST /api/ai/chat（通用管理助手）
+│   ├── ai_handler.rs    #   /api/ai 系列：provider 增删改查、设为默认、连通性测试、工具调用审计（分页 + 工具名/成败筛选、保留期清理 purge）、GET/PUT /api/ai/crawl-prompt（自定义抓取提示词）、GET/PUT /api/ai/crawl-mode（抓取模式切换）、POST /api/ai/classify-products（同步打标签）、/api/ai/classify-tasks 系列（异步任务：创建/查询/取消）、GET /api/ai/tools（管理 Agent 工具清单）、POST /api/ai/chat（通用管理助手）、/api/ai/chat/sessions 系列（会话：列表/新建/详情/改名/删除/发消息）
 │   └── stats_handler.rs #   GET /api/stats（KPI 概览统计）
 ├── application/         # 应用层：用例编排，不含业务规则
 │   ├── ports.rs         #   端口 trait：XianYuGateway、AiGateway/AiTool（防腐层）
@@ -65,7 +65,7 @@ src/
 │   ├── ai_tool_call_service.rs # AI 工具调用审计：分页筛选查询（工具名/成败）+ 保留期清理（PurgeCriteria 二选一校验）
 │   ├── trend_service.rs #   价格趋势计算（按商品聚合 items 成 PriceTrendSeries）
 │   ├── cancel_token.rs  #   共享取消令牌存储（watch 信号，异步分类任务取消用）
-│   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（ReAct 抓取）/ crawl_direct_service（单轮调用抓取，默认）/ crawl_shared（ProductCrawler 端口 + 统计落库共享）/ crawl_switch（运行时按 app_settings 切换两种抓取实现）/ admin_tools（通用管理 Agent 工具集：AdminToolsService + 19 个 AiTool，见下）
+│   ├── ai/            #   AI 用例：classify_service（自动打标签）/ crawl_agent_service（ReAct 抓取）/ crawl_direct_service（单轮调用抓取，默认）/ crawl_shared（ProductCrawler 端口 + 统计落库共享）/ crawl_switch（运行时按 app_settings 切换两种抓取实现）/ admin_tools（通用管理 Agent 工具集：AdminToolsService + 19 个 AiTool，见下）/ chat_session_service（AI 助手会话：会话+消息持久化，带历史上下文对话）
 │   └── stats_service.rs #   KPI 概览统计（商品总数 / 24h 抓取 / 最后爬取时间）
 ├── domain/              # 领域层：零外部依赖
 │   ├── item.rs          #   Item 实体，Keyword/PageRange 值对象（含校验）
@@ -76,8 +76,9 @@ src/
 │   ├── ai_provider.rs   #   AiProvider 实体（OpenAI 兼容端点配置）+ ProviderName/BaseUrl/ModelName 值对象
 │   ├── ai_classify_task.rs # AiClassifyTask 实体：自动打标签异步任务，状态机同 CrawlTask（内存仓储，重启即失）
 │   ├── ai_tool_call.rs  #   AiToolCall 审计实体
+│   ├── ai_conversation.rs # AI 助手会话实体：Conversation（标题自动生成/手动改名）+ ConversationMessage（user/assistant 角色）
 │   ├── price_trend.rs   #   PriceTrendPoint/PriceTrendSeries 只读结构（价格趋势图数据，无行为）
-│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiClassifyTaskRepository / AiToolCallRepository / SettingsRepository（KV 设置）
+│   ├── repository.rs    #   仓储端口 trait：ItemRepository / CrawlTaskRepository / TagRepository / ProductRepository / QueueRepository / AiProviderRepository / AiClassifyTaskRepository / AiToolCallRepository / SettingsRepository（KV 设置）/ ConversationRepository（AI 助手会话）
 │   └── error.rs         #   DomainError，全项目统一错误语义
 └── infrastructure/      # 基础设施层：实现内层定义的 trait
     ├── config.rs        #   环境变量配置
@@ -96,14 +97,14 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
 ├── src/lib/queue.tsx    #   QueueContext：队列状态 + 入队/追加/间隔，AppShell 提供实现，任意页面可用
 ├── src/AppShell.tsx     #   布局壳：Layout.Sider 导航 + Header（队列状态指示/健康徽标/主题切换）+ Outlet
 ├── src/components/      #   共享小组件（PageHeader 页头、AiChat AI 助手聊天面板）
-└── src/pages/           #   六个页面：OverviewPage（KPI + QueuesPanel）/ ProductsPage / TagsPage / ItemsPage / TrendsPage / AiPage
+└── src/pages/           #   七个页面：OverviewPage（KPI + QueuesPanel）/ ProductsPage / TagsPage / ItemsPage / TrendsPage / AiAssistantPage / AiPage
 ```
 
 前端约定：
 
 - `web/vite.config.ts`：dev 端口 5173（避让后端 3000），`/api` 代理到 `127.0.0.1:3000`；`build.outDir` 指向 `../static` 且 `emptyOutDir`，构建即覆盖旧产物；antd/recharts/react 经 `manualChunks` 独立分包。
 - **UI 体系是 antd v5，不再使用 Tailwind/shadcn**（2026-08 重写）：主题 token 集中在 `App.tsx` 的 `ConfigProvider`（琥珀主色 `#d97706` 延续闲鱼黄、全局 `compactAlgorithm` 紧凑密度、dark/light `algorithm` 切换）；深浅色状态在 `lib/theme-mode.ts`（localStorage 持久化）；样式优先用 antd 组件与 token，少量自定义样式写 `src/index.css`（如 `.num` 等宽数字字体）。反馈一律走 `AntApp.useApp()` 的 `message`/`modal`（不用 antd 静态函数）。
-- 前端用 `react-router` 的 **HashRouter**（避免 axum 静态托管需要路由回退）：六个页面 = 概览（KPI + 队列）/ 商品管理 / 标签管理 / 抓取数据 / 价格趋势 / AI 配置，路由声明在 `App.tsx`，布局壳是 `AppShell.tsx`（antd Layout：Sider 导航 + 48px Header）。Header 常驻队列运行指示（运行中队列进度/排队数），任何页面可感知系统在跑。
+- 前端用 `react-router` 的 **HashRouter**（避免 axum 静态托管需要路由回退）：七个页面 = 概览（KPI + 队列）/ 商品管理 / 标签管理 / 抓取数据 / 价格趋势 / AI 助手 / AI 配置，路由声明在 `App.tsx`，布局壳是 `AppShell.tsx`（antd Layout：Sider 导航 + 48px Header）。Header 常驻队列运行指示（运行中队列进度/排队数），任何页面可感知系统在跑。
 - **服务端状态一律走 @tanstack/react-query**，不再在 `App.tsx` 手写 useState+useEffect 加载：共享数据 hooks 在 `lib/queries.ts`；页面级分页查询（products/items/aiCalls）以查询条件对象作 queryKey 定义在各页面内（`placeholderData: keepPreviousData` 防翻页闪烁）；变更操作后 `invalidateQueries` 对应 key。
 - 队列轮询逻辑在 `lib/queries.ts::useQueues`：有 waiting/running 队列时 `refetchInterval` 2 秒自刷新；刚全部结束的判定在 `AppShell.tsx`（useEffect 比对前后状态），届时补刷 products/items/stats 三个 queryKey。
 - 跨页面的队列操作（商品页入队、概览页追加条目、appendTarget/intervalSecs 共享状态）走 `lib/queue.tsx` 的 `QueueContext`，由 `AppShell` 提供实现（含入队成功/失败的 message 提示与 queues 失效）。
@@ -147,7 +148,8 @@ web/                     # 前端源码：React 19 + TS + Vite 7 + antd v5 + @ta
   - **AI 自动打标签用例**（`application/ai/classify_service.rs`，详细方案见 `docs/design-batch-import-ai-classify.md`）：传入商品 id 列表，AI 调 `list_tags` 等工具为商品匹配标签并写回。两条路径：`POST /api/ai/classify-products` 同步（单次上限 50 个）与 `POST /api/ai/classify-tasks` 异步任务（每批 50 个，内存仓储，可查进度、可取消——取消信号走 `cancel_token.rs` 的 watch 令牌）。后续新用例来了只需在 `application/ai/` 加 service 并注册工具。
   - **通用管理 Agent 工具集**（`application/ai/admin_tools.rs`，**19 个 AiTool**）：把后台各接口的能力直接暴露成工具，供 `POST /api/ai/chat`（自然语言 → agent 自主调工具查改数据）与外部智能体使用。工具列表：商品 `list_products`/`get_product`/`create_product`/`update_product`/`delete_product`/`batch_create_products`，标签 `list_tags`/`create_tag`/`update_tag`/`delete_tag`，抓取记录 `list_items`，统计 `get_stats`，队列 `list_queues`/`get_queue`/`enqueue`/`pause_queue`/`resume_queue`/`cancel_queue`，趋势 `get_price_trend`。
     - 设计：工具**直接调 application 层 service**（复用业务规则：重名校验、标签存在校验、队列去重等），不走 HTTP；读工具收敛结果（分页/字段裁剪）防上下文淹没；删除类工具 description 要求先确认。
-    - `AdminToolsService::tools()` 集中注册；`GET /api/ai/tools` 返回 name/description/参数 Schema（JSON，供外部智能体动态注册）；`POST /api/ai/chat` 入参 `{message}`，走 `run_agent` 循环（max_rounds=12），所有工具调用自动落 `ai_tool_calls` 审计。前端「AI 配置 → AI 助手」tab（`web/src/components/AiChat.tsx`）内置对话界面：自然语言指令 → 调 `POST /api/ai/chat` → 展示 agent 回答（ReAct 循环在后端跑，前端等最终结果）；未配置 AI 时给出引导。
+    - `AdminToolsService::tools()` 集中注册；`GET /api/ai/tools` 返回 name/description/参数 Schema（JSON，供外部智能体动态注册）；`POST /api/ai/chat` 入参 `{message}`，走 `run_agent` 循环（max_rounds=12），所有工具调用自动落 `ai_tool_calls` 审计。前端「AI 助手」页（`web/src/pages/AiAssistantPage.tsx` + `web/src/components/AiChat.tsx`）内置对话界面：自然语言指令 → 调 `POST /api/ai/chat` → 展示 agent 回答（ReAct 循环在后端跑，前端等最终结果）；未配置 AI 时给出引导。
+    - **AI 助手会话系统**（`application/ai/chat_session_service.rs` + 前端 `AiChat.tsx` 会话侧栏）：会话与消息落 `ai_conversations`/`ai_conversation_messages` 表（SQLite，重启不丢）。接口：`GET/POST /api/ai/chat/sessions`、`GET/DELETE /api/ai/chat/sessions/{id}`、`PUT /api/ai/chat/sessions/{id}/title`（改名）、`POST /api/ai/chat/sessions/{id}/messages`（发消息：落库用户消息 → `AdminToolsService::chat_with_history` 带最近 20 条历史跑 agent → 落库 AI 回复）。首条消息自动生成会话标题（`Conversation::auto_title_from`）。前端会话侧栏支持新建/切换/改名/删除，消息流本地乐观更新后刷新。
     - 新增工具约定：在 `admin_tools.rs` 里加一个实现 `AiTool` 的 struct（持有对应 service 的 `Arc`），在 `AdminToolsService::tools()` 注册即可；写工具（尤其删除/入队）在 description 里写清副作用。有副作用写操作目前无人工确认（与 AI 抓取同策略），如需加确认机制再迭代。
 
 ## 扩展约定

@@ -3,6 +3,9 @@
 use async_trait::async_trait;
 
 use super::ai_classify_task::AiClassifyTask;
+use super::ai_conversation::{
+    Conversation, ConversationMessage, NewConversationMessage,
+};
 use super::ai_provider::{AiProvider, NewAiProvider};
 use super::ai_tool_call::{AiToolCall, NewAiToolCall};
 use super::crawl_queue::{CrawlEntry, CrawlQueue, QueueStatus};
@@ -200,4 +203,23 @@ pub trait SettingsRepository: Send + Sync {
     async fn get(&self, key: &str) -> Result<Option<String>, DomainError>;
     /// 覆盖式写入（INSERT OR REPLACE）
     async fn set(&self, key: &str, value: &str) -> Result<(), DomainError>;
+}
+
+/// AI 助手会话仓储：会话 + 消息的持久化（SQLite，重启不丢）
+#[async_trait]
+pub trait ConversationRepository: Send + Sync {
+    /// 创建会话并返回带 id 的完整实体
+    async fn create_conversation(&self, conversation: &Conversation) -> Result<Conversation, DomainError>;
+    async fn find_conversation(&self, id: i64) -> Result<Option<Conversation>, DomainError>;
+    /// 全部会话按最近更新倒序
+    async fn list_conversations(&self) -> Result<Vec<Conversation>, DomainError>;
+    async fn update_conversation(&self, conversation: &Conversation) -> Result<(), DomainError>;
+    /// 删除会话及其全部消息，返回是否真的删除了记录
+    async fn delete_conversation(&self, id: i64) -> Result<bool, DomainError>;
+    /// 追加一条消息并返回带 id 的完整实体
+    async fn add_message(&self, message: &NewConversationMessage) -> Result<ConversationMessage, DomainError>;
+    /// 某会话的全部消息（按时间正序）
+    async fn list_messages(&self, conversation_id: i64) -> Result<Vec<ConversationMessage>, DomainError>;
+    /// 某会话的消息数（列表用）
+    async fn count_messages(&self, conversation_id: i64) -> Result<u64, DomainError>;
 }

@@ -82,3 +82,7 @@ export type { TestConnectionResponse } from './generated/TestConnectionResponse'
 export type { AiChatRequest } from './generated/AiChatRequest';
 export type { AiChatResponse } from './generated/AiChatResponse';
 export type { AiToolInfoResponse } from './generated/AiToolInfoResponse';
+export type { ConversationResponse } from './generated/ConversationResponse';
+export type { ConversationMessageResponse } from './generated/ConversationMessageResponse';
+export type { ConversationDetailResponse } from './generated/ConversationDetailResponse';
+export type { RenameConversationRequest } from './generated/RenameConversationRequest';

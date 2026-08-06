@@ -7,6 +7,7 @@
 //! - crawl_shared：两种路径共享的 ProductCrawler 端口、CrawlOutcome 与统计落库逻辑
 
 pub mod admin_tools;
+pub mod chat_session_service;
 pub mod classify_service;
 pub mod crawl_agent_service;
 pub mod crawl_direct_service;

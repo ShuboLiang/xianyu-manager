@@ -11,8 +11,9 @@ use super::dto::{
     AiProviderUpdateRequest, AiStatusResponse, AiToolCallListQuery, AiToolCallPurgePreviewResponse,
     AiToolCallPurgeRequest, AiToolCallPurgeResponse, AiToolCallResponse, AiToolInfoResponse,
     ApiResponse, ClassifyProductsRequest, ClassifyProductsResponse, ClassifyTaskResponse,
-    CrawlModeResponse, CrawlPromptRequest, CrawlPromptResponse, PageResponse, TestConnectionResponse,
-    UpdateCrawlModeRequest,
+    ConversationDetailResponse, ConversationMessageResponse, ConversationResponse,
+    CrawlModeResponse, CrawlPromptRequest, CrawlPromptResponse, PageResponse,
+    RenameConversationRequest, TestConnectionResponse, UpdateCrawlModeRequest,
 };
 use super::item_handler::normalize_page;
 use super::AppState;
@@ -297,5 +298,87 @@ pub async fn ai_chat(
         Ok(reply) => Json(ApiResponse::ok(AiChatResponse { reply })),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
+}
+
+/// GET /api/ai/chat/sessions：全部会话（按最近更新倒序，含消息数）
+pub async fn list_conversations(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<ConversationResponse>>> {
+    match state.chat_session_service.list_with_counts().await {
+        Ok(list) => Json(ApiResponse::ok(
+            list.into_iter()
+                .map(|(c, count)| ConversationResponse::from_conversation(c, count))
+                .collect(),
+        )),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/ai/chat/sessions：新建会话
+pub async fn create_conversation(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<ConversationResponse>> {
+    match state.chat_session_service.create().await {
+        Ok(c) => Json(ApiResponse::ok(ConversationResponse::from_conversation(c, 0))),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// GET /api/ai/chat/sessions/{id}：会话详情 + 全部消息
+pub async fn get_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<ConversationDetailResponse>> {
+    match state.chat_session_service.get(id).await {
+        Ok((conversation, messages)) => Json(ApiResponse::ok(ConversationDetailResponse {
+            conversation: ConversationResponse::from_conversation(conversation, messages.len() as u64),
+            messages: messages.into_iter().map(Into::into).collect(),
+        })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// PUT /api/ai/chat/sessions/{id}/title：会话改名
+pub async fn rename_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<RenameConversationRequest>,
+) -> Json<ApiResponse<ConversationResponse>> {
+    match state.chat_session_service.rename(id, req.title).await {
+        Ok(c) => {
+            let count = state.chat_session_service.message_count(c.id).await.unwrap_or(0);
+            Json(ApiResponse::ok(ConversationResponse::from_conversation(c, count)))
+        }
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// DELETE /api/ai/chat/sessions/{id}：删除会话及其消息
+pub async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<()>> {
+    match state.chat_session_service.delete(id).await {
+        Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// POST /api/ai/chat/sessions/{id}/messages：会话内发消息（AI 带历史回复）
+pub async fn chat_in_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<AiChatRequest>,
+) -> Json<ApiResponse<AiChatResponse>> {
+    match state.chat_session_service.chat(id, &req.message).await {
+        Ok(reply) => Json(ApiResponse::ok(AiChatResponse { reply })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// 辅助：消息列表响应（供前端会话详情直接复用）
+#[allow(dead_code)]
+fn messages_response(messages: Vec<crate::domain::ai_conversation::ConversationMessage>) -> Vec<ConversationMessageResponse> {
+    messages.into_iter().map(Into::into).collect()
 }
 

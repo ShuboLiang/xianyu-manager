@@ -7,6 +7,7 @@ use crate::application::ai_provider_service::{AiStatus, TestConnectionResult};
 use crate::application::ai::classify_service::{ClassifySuggestion, ClassifySyncResult};
 use crate::application::queue_service::QueueProgress;
 use crate::domain::ai_classify_task::{AiClassifyTask, ClassifyWarning};
+use crate::domain::ai_conversation::{Conversation, ConversationMessage};
 use crate::domain::ai_provider::AiProvider;
 use crate::domain::ai_tool_call::AiToolCall;
 use crate::domain::crawl_queue::Selector;
@@ -627,6 +628,73 @@ pub struct AiToolInfoResponse {
     /// 参数的 JSON Schema
     #[ts(type = "any")]
     pub parameters: serde_json::Value,
+}
+
+/// AI 助手会话摘要（列表用）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ConversationResponse {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub title: String,
+    /// 消息数（用于列表展示）
+    #[ts(type = "number")]
+    pub message_count: u64,
+    #[ts(type = "number")]
+    pub created_at: u64,
+    #[ts(type = "number")]
+    pub updated_at: u64,
+}
+
+/// AI 助手会话消息
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ConversationMessageResponse {
+    #[ts(type = "number")]
+    pub id: i64,
+    /// "user" | "assistant"
+    pub role: String,
+    pub content: String,
+    #[ts(type = "number")]
+    pub created_at: u64,
+}
+
+/// AI 助手会话详情（会话 + 全部消息）
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ConversationDetailResponse {
+    pub conversation: ConversationResponse,
+    pub messages: Vec<ConversationMessageResponse>,
+}
+
+/// AI 助手会话改名请求
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct RenameConversationRequest {
+    pub title: String,
+}
+
+impl ConversationResponse {
+    pub fn from_conversation(c: Conversation, message_count: u64) -> Self {
+        Self {
+            id: c.id,
+            title: c.title,
+            message_count,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+        }
+    }
+}
+
+impl From<ConversationMessage> for ConversationMessageResponse {
+    fn from(m: ConversationMessage) -> Self {
+        Self {
+            id: m.id,
+            role: m.role.as_str().to_string(),
+            content: m.content,
+            created_at: m.created_at,
+        }
+    }
 }
 
 /// 统一 API 响应结构（泛型包装，TS 侧在 web/src/types/api.ts 手写，不经 ts-rs 导出）

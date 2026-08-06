@@ -6,6 +6,9 @@ use async_trait::async_trait;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
 
+use crate::domain::ai_conversation::{
+    Conversation, ConversationMessage, MessageRole, NewConversationMessage,
+};
 use crate::domain::ai_provider::{
     AiProvider, BaseUrl, ExtraParams, ModelName, NewAiProvider, ProviderName,
 };
@@ -15,8 +18,8 @@ use crate::domain::error::DomainError;
 use crate::domain::item::Item;
 use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{
-    AiProviderRepository, AiToolCallRepository, ItemRepository, Page, ProductRepository,
-    ProductSortColumn, QueueRepository, SettingsRepository, TagRepository,
+    AiProviderRepository, AiToolCallRepository, ConversationRepository, ItemRepository, Page,
+    ProductRepository, ProductSortColumn, QueueRepository, SettingsRepository, TagRepository,
 };
 use crate::domain::tag::{NewTag, Tag, TagName};
 
@@ -241,6 +244,39 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    // AI 助手会话与消息（会话历史持久化，重启不丢）
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_conversations (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            title      TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_conversation_messages (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            role            TEXT NOT NULL,
+            content         TEXT NOT NULL,
+            created_at      INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_conv_messages_conversation
+         ON ai_conversation_messages(conversation_id)",
     )
     .execute(&*pool)
     .await
@@ -1503,6 +1539,139 @@ impl SettingsRepository for SqliteSettingsRepository {
             .await
             .map_err(to_infra)?;
         Ok(())
+    }
+}
+
+// ---------- AI 助手会话 ----------
+
+pub struct SqliteConversationRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteConversationRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ConversationRepository for SqliteConversationRepository {
+    async fn create_conversation(&self, conversation: &Conversation) -> Result<Conversation, DomainError> {
+        let result = sqlx::query(
+            "INSERT INTO ai_conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
+        )
+        .bind(&conversation.title)
+        .bind(conversation.created_at as i64)
+        .bind(conversation.updated_at as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(Conversation {
+            id: result.last_insert_rowid(),
+            title: conversation.title.clone(),
+            created_at: conversation.created_at,
+            updated_at: conversation.updated_at,
+        })
+    }
+
+    async fn find_conversation(&self, id: i64) -> Result<Option<Conversation>, DomainError> {
+        let row = sqlx::query("SELECT * FROM ai_conversations WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(row.map(|r| row_to_conversation(&r)))
+    }
+
+    async fn list_conversations(&self) -> Result<Vec<Conversation>, DomainError> {
+        let rows = sqlx::query("SELECT * FROM ai_conversations ORDER BY updated_at DESC, id DESC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(rows.iter().map(row_to_conversation).collect())
+    }
+
+    async fn update_conversation(&self, conversation: &Conversation) -> Result<(), DomainError> {
+        sqlx::query("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?")
+            .bind(&conversation.title)
+            .bind(conversation.updated_at as i64)
+            .bind(conversation.id)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(())
+    }
+
+    async fn delete_conversation(&self, id: i64) -> Result<bool, DomainError> {
+        let result = sqlx::query("DELETE FROM ai_conversations WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn add_message(&self, message: &NewConversationMessage) -> Result<ConversationMessage, DomainError> {
+        let now = crate::domain::crawl_task::now_unix();
+        let result = sqlx::query(
+            "INSERT INTO ai_conversation_messages (conversation_id, role, content, created_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(message.conversation_id)
+        .bind(message.role.as_str())
+        .bind(&message.content)
+        .bind(now as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(ConversationMessage {
+            id: result.last_insert_rowid(),
+            conversation_id: message.conversation_id,
+            role: message.role,
+            content: message.content.clone(),
+            created_at: now,
+        })
+    }
+
+    async fn list_messages(&self, conversation_id: i64) -> Result<Vec<ConversationMessage>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(rows.iter().map(row_to_conversation_message).collect())
+    }
+
+    async fn count_messages(&self, conversation_id: i64) -> Result<u64, DomainError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS c FROM ai_conversation_messages WHERE conversation_id = ?",
+        )
+        .bind(conversation_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(to_infra)?;
+        Ok(row.get::<i64, _>("c") as u64)
+    }
+}
+
+fn row_to_conversation(row: &SqliteRow) -> Conversation {
+    Conversation {
+        id: row.get("id"),
+        title: row.get("title"),
+        created_at: row.get::<i64, _>("created_at") as u64,
+        updated_at: row.get::<i64, _>("updated_at") as u64,
+    }
+}
+
+fn row_to_conversation_message(row: &SqliteRow) -> ConversationMessage {
+    ConversationMessage {
+        id: row.get("id"),
+        conversation_id: row.get("conversation_id"),
+        role: MessageRole::from_str(&row.get::<String, _>("role")).unwrap_or(MessageRole::User),
+        content: row.get("content"),
+        created_at: row.get::<i64, _>("created_at") as u64,
     }
 }
 
