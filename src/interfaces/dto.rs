@@ -543,6 +543,8 @@ pub struct AiToolCallResponse {
     pub cached_input_tokens: Option<u64>,
     #[ts(type = "number")]
     pub created_at: u64,
+    /// 来源：assistant（AI 助手）/ crawl（AI 抓取）/ classify（AI 打标签）；老记录为 null
+    pub source: Option<String>,
 }
 
 impl From<AiToolCall> for AiToolCallResponse {
@@ -558,11 +560,12 @@ impl From<AiToolCall> for AiToolCallResponse {
             output_tokens: c.output_tokens,
             cached_input_tokens: c.cached_input_tokens,
             created_at: c.created_at,
+            source: c.source,
         }
     }
 }
 
-/// AI 工具调用记录列表查询参数：分页 + 工具名/成败筛选
+/// AI 工具调用记录列表查询参数：分页 + 工具名/来源/成败筛选
 #[derive(Debug, Deserialize, TS)]
 #[ts(export)]
 pub struct AiToolCallListQuery {
@@ -575,6 +578,8 @@ pub struct AiToolCallListQuery {
     /// true = 只看失败，false = 只看成功，缺省 = 全部
     #[ts(type = "boolean | null")]
     pub failed: Option<bool>,
+    /// 来源精确匹配（assistant/crawl/classify），缺省 = 全部
+    pub source: Option<String>,
 }
 
 /// AI 工具调用记录清理请求：before_days 与 keep_latest 恰填一个（service 层校验）

@@ -180,7 +180,8 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         )
         .route(
             "/ai/chat/sessions/{id}/messages",
-            post(ai_handler::chat_in_conversation),
+            post(ai_handler::chat_in_conversation)
+                .delete(ai_handler::clear_conversation_messages),
         )
         .with_state(state);
 

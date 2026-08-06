@@ -19,6 +19,7 @@ use crate::application::queue_service::{EnqueueTarget, QueueProgress, QueueServi
 use crate::application::stats_service::StatsService;
 use crate::application::tag_service::{TagPatch, TagService};
 use crate::application::trend_service::TrendService;
+use crate::domain::ai_tool_call::source as ai_source;
 use crate::domain::crawl_queue::Selector;
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
@@ -118,7 +119,7 @@ impl AdminToolsService {
         }
         let tools = self.tools();
         self.ai_gateway
-            .run_agent(SYSTEM_PROMPT, user, &tools, MAX_ROUNDS)
+            .run_agent(SYSTEM_PROMPT, user, &tools, MAX_ROUNDS, ai_source::ASSISTANT)
             .await
     }
 
@@ -135,7 +136,7 @@ impl AdminToolsService {
         let prompt = build_history_prompt(user, history);
         let tools = self.tools();
         self.ai_gateway
-            .run_agent(SYSTEM_PROMPT, &prompt, &tools, MAX_ROUNDS)
+            .run_agent(SYSTEM_PROMPT, &prompt, &tools, MAX_ROUNDS, ai_source::ASSISTANT)
             .await
     }
 }

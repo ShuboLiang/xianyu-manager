@@ -169,13 +169,15 @@ pub trait AiProviderRepository: Send + Sync {
 pub trait AiToolCallRepository: Send + Sync {
     /// 落一条工具调用审计记录并返回带 id 的完整实体
     async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError>;
-    /// 按时间倒序分页；tool_name 精确匹配筛选，failed_only: Some(true)=只看失败 / Some(false)=只看成功 / None=全部
+    /// 按时间倒序分页；tool_name 精确匹配筛选，failed_only: Some(true)=只看失败 / Some(false)=只看成功 / None=全部；
+    /// source 精确匹配筛选（source 模块常量），None=全部
     async fn list_paginated(
         &self,
         offset: u64,
         limit: u64,
         tool_name: Option<&str>,
         failed_only: Option<bool>,
+        source: Option<&str>,
     ) -> Result<Page<AiToolCall>, DomainError>;
     /// 库中出现过的工具名（去重、按名称排序，前端筛选下拉用）
     async fn list_tool_names(&self) -> Result<Vec<String>, DomainError>;
@@ -222,4 +224,6 @@ pub trait ConversationRepository: Send + Sync {
     async fn list_messages(&self, conversation_id: i64) -> Result<Vec<ConversationMessage>, DomainError>;
     /// 某会话的消息数（列表用）
     async fn count_messages(&self, conversation_id: i64) -> Result<u64, DomainError>;
+    /// 清空某会话的全部消息（保留会话本身）
+    async fn clear_messages(&self, conversation_id: i64) -> Result<(), DomainError>;
 }

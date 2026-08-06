@@ -121,6 +121,13 @@ const TOOL_TAG_COLOR: Record<string, string> = {
   refine_search_keyword: 'purple',
 };
 
+// 工具调用记录来源：与后端 domain::ai_tool_call::source 常量一一对应
+const SOURCE_OPTIONS: { value: string; label: string; color: string }[] = [
+  { value: 'assistant', label: 'AI 助手', color: 'blue' },
+  { value: 'crawl', label: 'AI 抓取', color: 'green' },
+  { value: 'classify', label: 'AI 打标签', color: 'orange' },
+];
+
 /** JSON 美化：能解析则缩进展示，否则原样输出 */
 function prettyJson(raw: string): string {
   try {
@@ -294,7 +301,8 @@ export function AiPage() {
     pageSize: number;
     toolName: string | null;
     failed: boolean | null;
-  }>({ page: 1, pageSize: 20, toolName: null, failed: null });
+    source: string | null;
+  }>({ page: 1, pageSize: 20, toolName: null, failed: null, source: null });
 
   // 筛选下拉的工具名选项（库中实际出现过的工具）
   const { data: toolNames } = useQuery({
@@ -312,6 +320,7 @@ export function AiPage() {
       });
       if (callsQuery.toolName) params.set('tool_name', callsQuery.toolName);
       if (callsQuery.failed !== null) params.set('failed', String(callsQuery.failed));
+      if (callsQuery.source) params.set('source', callsQuery.source);
       return apiGet<PageResponse<AiToolCall>>(`/api/ai/tool-calls?${params}`);
     },
   });
@@ -672,6 +681,16 @@ export function AiPage() {
                         setCallsQuery((q) => ({ ...q, page: 1, failed: v }))
                       }
                     />
+                    <Select
+                      allowClear
+                      placeholder="全部来源"
+                      style={{ width: 140 }}
+                      value={callsQuery.source}
+                      options={SOURCE_OPTIONS.map((s) => ({ value: s.value, label: s.label }))}
+                      onChange={(v) =>
+                        setCallsQuery((q) => ({ ...q, page: 1, source: v ?? null }))
+                      }
+                    />
                     <Button danger onClick={() => setPurgeOpen(true)}>
                       清理历史
                     </Button>
@@ -738,6 +757,21 @@ export function AiPage() {
                           {v}
                         </Tag>
                       ),
+                    },
+                    {
+                      title: '来源',
+                      dataIndex: 'source',
+                      width: 110,
+                      render: (v: string | null) => {
+                        const meta = SOURCE_OPTIONS.find((s) => s.value === v);
+                        return meta ? (
+                          <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>
+                            {meta.label}
+                          </Tag>
+                        ) : (
+                          <span style={{ opacity: 0.5 }}>—</span>
+                        );
+                      },
                     },
                     {
                       title: '参数',

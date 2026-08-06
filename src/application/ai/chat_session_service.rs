@@ -84,6 +84,17 @@ impl ChatSessionService {
         Ok(())
     }
 
+    /// 清空会话的全部消息（保留会话本身），可用于重置对话上下文
+    pub async fn clear(&self, id: i64) -> Result<(), DomainError> {
+        self.conversations
+            .find_conversation(id)
+            .await?
+            .ok_or_else(|| DomainError::NotFound(format!("会话 {id}")))?;
+        self.conversations.clear_messages(id).await?;
+        tracing::info!("清空 AI 助手会话 #{id} 的消息");
+        Ok(())
+    }
+
     /// 发一条用户消息：落库 → 带最近历史跑 agent → 落 AI 回复 → 返回回复文本。
     /// 首条消息时自动从用户消息生成会话标题。
     pub async fn chat(&self, id: i64, user_message: &str) -> Result<String, DomainError> {

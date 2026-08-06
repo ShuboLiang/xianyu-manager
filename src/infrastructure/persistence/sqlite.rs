@@ -215,7 +215,8 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             input_tokens        INTEGER,
             output_tokens       INTEGER,
             cached_input_tokens INTEGER,
-            created_at  INTEGER NOT NULL
+            created_at  INTEGER NOT NULL,
+            source      TEXT
         )",
     )
     .execute(&*pool)
@@ -228,9 +229,14 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
         .await
         .map_err(to_infra)?;
     let col_names: Vec<String> = cols.iter().map(|r| r.get("name")).collect();
-    for col in ["input_tokens", "output_tokens", "cached_input_tokens"] {
+    for (col, col_type) in [
+        ("input_tokens", "INTEGER"),
+        ("output_tokens", "INTEGER"),
+        ("cached_input_tokens", "INTEGER"),
+        ("source", "TEXT"),
+    ] {
         if !col_names.iter().any(|c| c == col) {
-            sqlx::query(&format!("ALTER TABLE ai_tool_calls ADD COLUMN {col} INTEGER"))
+            sqlx::query(&format!("ALTER TABLE ai_tool_calls ADD COLUMN {col} {col_type}"))
                 .execute(&*pool)
                 .await
                 .map_err(to_infra)?;
@@ -1119,8 +1125,8 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
     async fn create(&self, call: &NewAiToolCall) -> Result<AiToolCall, DomainError> {
         let now = crate::domain::crawl_task::now_unix();
         let result = sqlx::query(
-            "INSERT INTO ai_tool_calls (tool_name, arguments, result, error, duration_ms, input_tokens, output_tokens, cached_input_tokens, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ai_tool_calls (tool_name, arguments, result, error, duration_ms, input_tokens, output_tokens, cached_input_tokens, created_at, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&call.tool_name)
         .bind(&call.arguments)
@@ -1131,6 +1137,7 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
         .bind(call.output_tokens.map(|v| v as i64))
         .bind(call.cached_input_tokens.map(|v| v as i64))
         .bind(now as i64)
+        .bind(&call.source)
         .execute(&self.pool)
         .await
         .map_err(to_infra)?;
@@ -1146,6 +1153,7 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
             output_tokens: call.output_tokens,
             cached_input_tokens: call.cached_input_tokens,
             created_at: now,
+            source: Some(call.source.clone()),
         })
     }
 
@@ -1155,14 +1163,18 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
         limit: u64,
         tool_name: Option<&str>,
         failed_only: Option<bool>,
+        source: Option<&str>,
     ) -> Result<Page<AiToolCall>, DomainError> {
-        let where_clause = ai_tool_call_where(tool_name.is_some(), failed_only);
+        let where_clause = ai_tool_call_where(tool_name.is_some(), failed_only, source.is_some());
         let list_sql = format!(
             "SELECT * FROM ai_tool_calls{where_clause} ORDER BY created_at DESC, id DESC LIMIT {limit} OFFSET {offset}"
         );
         let mut list_q = sqlx::query(&list_sql);
         if let Some(name) = tool_name {
             list_q = list_q.bind(name);
+        }
+        if let Some(src) = source {
+            list_q = list_q.bind(src);
         }
         let rows = list_q
             .fetch_all(&self.pool)
@@ -1177,6 +1189,9 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
         let mut count_q = sqlx::query(&count_sql);
         if let Some(name) = tool_name {
             count_q = count_q.bind(name);
+        }
+        if let Some(src) = source {
+            count_q = count_q.bind(src);
         }
         let count_row = count_q
             .fetch_one(&self.pool)
@@ -1224,9 +1239,9 @@ impl AiToolCallRepository for SqliteAiToolCallRepository {
     }
 }
 
-/// 列表筛选的 WHERE 子句：tool_name 以占位符形式出现（调用方负责 bind），
+/// 列表筛选的 WHERE 子句：tool_name / source 以占位符形式出现（调用方负责 bind），
 /// failed_only 是布尔值，拼入安全。
-fn ai_tool_call_where(has_tool_name: bool, failed_only: Option<bool>) -> String {
+fn ai_tool_call_where(has_tool_name: bool, failed_only: Option<bool>, has_source: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
     if has_tool_name {
         parts.push("tool_name = ?".to_string());
@@ -1237,6 +1252,9 @@ fn ai_tool_call_where(has_tool_name: bool, failed_only: Option<bool>) -> String 
         } else {
             "error IS NULL".to_string()
         });
+    }
+    if has_source {
+        parts.push("source = ?".to_string());
     }
     if parts.is_empty() {
         String::new()
@@ -1272,6 +1290,7 @@ fn row_to_ai_tool_call(row: &SqliteRow) -> Result<AiToolCall, DomainError> {
             .get::<Option<i64>, _>("cached_input_tokens")
             .map(|v| v as u64),
         created_at: row.get::<i64, _>("created_at") as u64,
+        source: row.get::<Option<String>, _>("source"),
     })
 }
 
@@ -1653,6 +1672,15 @@ impl ConversationRepository for SqliteConversationRepository {
         .await
         .map_err(to_infra)?;
         Ok(row.get::<i64, _>("c") as u64)
+    }
+
+    async fn clear_messages(&self, conversation_id: i64) -> Result<(), DomainError> {
+        sqlx::query("DELETE FROM ai_conversation_messages WHERE conversation_id = ?")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(())
     }
 }
 

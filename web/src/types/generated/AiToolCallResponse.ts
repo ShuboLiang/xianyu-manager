@@ -12,4 +12,8 @@ output_tokens: number | null,
 /**
  * 命中供应商缓存的输入 token 数
  */
-cached_input_tokens: number | null, created_at: number, };
+cached_input_tokens: number | null, created_at: number, 
+/**
+ * 来源：assistant（AI 助手）/ crawl（AI 抓取）/ classify（AI 打标签）；老记录为 null
+ */
+source: string | null, };

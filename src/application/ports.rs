@@ -55,12 +55,14 @@ pub trait AiGateway: Send + Sync {
     /// 档位 2：带工具的 agent 循环（ReAct）。tools 由应用层定义，
     /// 实现方负责「模型请求工具 → 执行 → 结果回填 → 再调用」的循环，
     /// 直到模型给出最终答案；max_rounds 封顶防工具调用死循环。
+    /// source 标记本次 agent 归属（ai_tool_call::source 常量），写入审计记录。
     async fn run_agent(
         &self,
         system: &str,
         user: &str,
         tools: &[Arc<dyn AiTool>],
         max_rounds: u32,
+        source: &str,
     ) -> Result<String, DomainError>;
 
     /// 用指定配置做连通性测试（不经过默认配置解析）

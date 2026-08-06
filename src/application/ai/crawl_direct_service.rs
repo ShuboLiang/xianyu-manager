@@ -16,6 +16,7 @@ use serde_json::Value as JsonValue;
 use crate::application::ai::crawl_shared::{finalize_crawl, CrawlOutcome, ProductCrawler, MAX_SELECTED};
 use crate::application::ai_settings_service::CRAWL_PROMPT_KEY;
 use crate::application::ports::{AiGateway, TokenUsage, XianYuGateway};
+use crate::domain::ai_tool_call::source as ai_source;
 use crate::domain::ai_tool_call::NewAiToolCall;
 use crate::domain::crawl_task::now_unix;
 use crate::domain::error::DomainError;
@@ -107,6 +108,7 @@ impl CrawlDirectService {
                 input_tokens,
                 output_tokens,
                 cached_input_tokens,
+                source: ai_source::CRAWL.to_string(),
             })
             .await
         {

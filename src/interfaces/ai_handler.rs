@@ -178,7 +178,7 @@ pub async fn list_tool_calls(
     let (page, page_size) = normalize_page(q.page, q.page_size);
     match state
         .ai_tool_call_service
-        .list_paginated(page, page_size, q.tool_name.as_deref(), q.failed)
+        .list_paginated(page, page_size, q.tool_name.as_deref(), q.failed, q.source.as_deref())
         .await
     {
         Ok(p) => Json(ApiResponse::ok(PageResponse::new(
@@ -372,6 +372,17 @@ pub async fn chat_in_conversation(
 ) -> Json<ApiResponse<AiChatResponse>> {
     match state.chat_session_service.chat(id, &req.message).await {
         Ok(reply) => Json(ApiResponse::ok(AiChatResponse { reply })),
+        Err(e) => Json(ApiResponse::err(e.to_string())),
+    }
+}
+
+/// DELETE /api/ai/chat/sessions/{id}/messages：清空会话全部消息（保留会话本身）
+pub async fn clear_conversation_messages(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Json<ApiResponse<()>> {
+    match state.chat_session_service.clear(id).await {
+        Ok(()) => Json(ApiResponse::ok(())),
         Err(e) => Json(ApiResponse::err(e.to_string())),
     }
 }

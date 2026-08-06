@@ -168,6 +168,7 @@ async fn execute_tool(
     calls: Arc<dyn AiToolCallRepository>,
     tool: &Arc<dyn AiTool>,
     arguments: serde_json::Value,
+    source: &str,
 ) -> Result<serde_json::Value, DomainError> {
     tracing::debug!("执行工具 {}: args={}", tool.name(), arguments);
     let start = std::time::Instant::now();
@@ -191,6 +192,7 @@ async fn execute_tool(
             input_tokens: None,
             output_tokens: None,
             cached_input_tokens: None,
+            source: source.to_string(),
         })
         .await
     {
@@ -208,6 +210,7 @@ async fn audit_llm_call(
     tool_names: &[String],
     usage: Option<TokenUsage>,
     duration_ms: u64,
+    source: &str,
 ) {
     let (input_tokens, output_tokens, cached_input_tokens) = match usage {
         Some(u) => (
@@ -233,6 +236,7 @@ async fn audit_llm_call(
             input_tokens,
             output_tokens,
             cached_input_tokens,
+            source: source.to_string(),
         })
         .await
     {
@@ -267,6 +271,7 @@ impl AiGateway for RigAiGateway {
         user: &str,
         tools: &[Arc<dyn AiTool>],
         max_rounds: u32,
+        source: &str,
     ) -> Result<String, DomainError> {
         let provider = self.resolve_provider().await?;
         let client = Self::build_client(&provider)?;
@@ -344,6 +349,7 @@ impl AiGateway for RigAiGateway {
                 &tool_names,
                 round_usage,
                 round_duration_ms,
+                source,
             )
             .await;
 
@@ -379,7 +385,7 @@ impl AiGateway for RigAiGateway {
                         DomainError::InvalidState(format!("未知工具: {}", tc.function.name))
                     })?;
 
-                let tool_result = match execute_tool(self.calls.clone(), tool, tc.function.arguments).await {
+                let tool_result = match execute_tool(self.calls.clone(), tool, tc.function.arguments, source).await {
                     Ok(v) => {
                         tracing::trace!("工具 {} 执行结果: {}", tc.function.name, v);
                         ToolResultContent::json(v)
@@ -441,6 +447,7 @@ impl AiGateway for MockAiGateway {
         _user: &str,
         _tools: &[Arc<dyn AiTool>],
         _max_rounds: u32,
+        _source: &str,
     ) -> Result<String, DomainError> {
         Ok("mock-agent".into())
     }
@@ -487,19 +494,20 @@ mod tests {
         let calls: Arc<dyn AiToolCallRepository> = Arc::new(SqliteAiToolCallRepository::new(pool));
 
         let echo: Arc<dyn AiTool> = Arc::new(EchoTool);
-        let res = execute_tool(calls.clone(), &echo, serde_json::json!({"x": 1})).await;
+        let res = execute_tool(calls.clone(), &echo, serde_json::json!({"x": 1}), "test").await;
         assert!(res.is_ok());
 
         let fail: Arc<dyn AiTool> = Arc::new(FailTool);
-        let res = execute_tool(calls.clone(), &fail, serde_json::json!({})).await;
+        let res = execute_tool(calls.clone(), &fail, serde_json::json!({}), "test").await;
         assert!(res.is_err());
 
-        let logs = calls.list_paginated(0, 10, None, None).await.unwrap().items;
+        let logs = calls.list_paginated(0, 10, None, None, None).await.unwrap().items;
         assert_eq!(logs.len(), 2);
 
         let success_log = logs.iter().find(|l| l.tool_name == "echo").unwrap();
         assert!(success_log.result.is_some());
         assert!(success_log.error.is_none());
+        assert_eq!(success_log.source.as_deref(), Some("test"));
 
         let fail_log = logs.iter().find(|l| l.tool_name == "fail").unwrap();
         assert!(fail_log.result.is_none());

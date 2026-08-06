@@ -291,6 +291,28 @@ export function AiChat({ configured }: { configured: boolean }) {
     });
   };
 
+  const clearConversation = () => {
+    if (activeId === null) return;
+    modal.confirm({
+      title: '清空对话？',
+      content: '将删除当前会话的全部消息（保留会话本身），对话上下文将被重置。',
+      okText: '清空',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await apiDelete(`/api/ai/chat/sessions/${activeId}/messages`);
+          setMessages([]);
+          queryClient.invalidateQueries({ queryKey: ['aiConversation', activeId] });
+          refreshSessions();
+          toast.success('对话已清空');
+        } catch (e) {
+          toast.error(`清空失败: ${(e as Error).message}`);
+        }
+      },
+    });
+  };
+
   const activeConversation = sessions.find((s) => s.id === activeId) ?? null;
 
   return (
@@ -401,6 +423,18 @@ export function AiChat({ configured }: { configured: boolean }) {
             {activeConversation ? `${activeConversation.message_count} 条消息` : '请选择或新建会话'}
           </Typography.Text>
           <span style={{ flex: 1 }} />
+          {activeConversation && (
+            <Tooltip title="清空对话上下文">
+              <Button
+                size="small"
+                icon={<DeleteOutlined />}
+                disabled={loading || (messages.length === 0)}
+                onClick={clearConversation}
+              >
+                清空对话
+              </Button>
+            </Tooltip>
+          )}
           <Tooltip title="查看全部可用工具">
             <Button
               type="link"

@@ -48,16 +48,17 @@ impl AiToolCallService {
     }
 
     /// 按时间倒序分页（page 从 1 开始，调用方已完成钳制）；
-    /// tool_name 精确匹配筛选，failed_only=true 只看失败
+    /// tool_name 精确匹配筛选，failed_only=true 只看失败，source 精确匹配来源筛选
     pub async fn list_paginated(
         &self,
         page: u64,
         page_size: u64,
         tool_name: Option<&str>,
         failed_only: Option<bool>,
+        source: Option<&str>,
     ) -> Result<Page<AiToolCall>, DomainError> {
         self.calls
-            .list_paginated((page - 1) * page_size, page_size, tool_name, failed_only)
+            .list_paginated((page - 1) * page_size, page_size, tool_name, failed_only, source)
             .await
     }
 

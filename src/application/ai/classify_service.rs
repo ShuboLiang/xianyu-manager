@@ -10,6 +10,7 @@ use tokio::sync::watch;
 
 use crate::application::ports::{AiGateway, AiTool};
 use crate::domain::ai_classify_task::{AiClassifyTask, ClassifyTaskStatus, ClassifyWarning};
+use crate::domain::ai_tool_call::source as ai_source;
 use crate::domain::crawl_task::now_unix;
 use crate::domain::error::DomainError;
 use crate::domain::repository::{AiClassifyTaskRepository, ProductRepository, TagRepository};
@@ -277,7 +278,7 @@ impl ClassifyService {
         let user = build_user_prompt(&product_infos);
         let output = self
             .ai_gateway
-            .run_agent(&system, &user, &tools, MAX_ROUNDS)
+            .run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CLASSIFY)
             .await?;
 
         // 模型光总结不调写工具 = 什么都没写入，按失败处理（设计文档 3.2）
@@ -470,7 +471,7 @@ impl ClassifyService {
                 }
                 return;
             }
-            result = self.ai_gateway.run_agent(&system, &user, &tools, MAX_ROUNDS) => {
+            result = self.ai_gateway.run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CLASSIFY) => {
                 result
             }
         };

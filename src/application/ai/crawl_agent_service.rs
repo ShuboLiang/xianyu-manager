@@ -13,6 +13,7 @@ use serde_json::Value as JsonValue;
 use crate::application::ai::crawl_shared::{finalize_crawl, CrawlOutcome, ProductCrawler, MAX_SELECTED};
 use crate::application::ai_settings_service::CRAWL_PROMPT_KEY;
 use crate::application::ports::{AiGateway, AiTool, XianYuGateway};
+use crate::domain::ai_tool_call::source as ai_source;
 use crate::domain::crawl_task::now_unix;
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
@@ -117,7 +118,7 @@ impl CrawlAgentService {
         tracing::trace!("AI agent system prompt: {}", system);
         tracing::trace!("AI agent user prompt: {}", user);
 
-        self.ai.run_agent(&system, &user, &tools, MAX_ROUNDS).await?;
+        self.ai.run_agent(&system, &user, &tools, MAX_ROUNDS, ai_source::CRAWL).await?;
 
         let taken = outcome.lock().expect("outcome 锁中毒").take();
         match &taken {
