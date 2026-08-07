@@ -152,6 +152,13 @@ impl CrawlSchedule {
         self.touch();
     }
 
+    /// 暂停期间已错过执行点时，恢复后从当前时刻重新开始周期，不自动补跑。
+    pub fn restart_from_now(&mut self, now: u64) {
+        self.schedule_after(now);
+        self.last_message = Some("已恢复：错过的执行不补跑，已从当前时间重新计算下一周期".into());
+        self.touch();
+    }
+
     pub fn disable_with_message(&mut self, message: String) {
         self.enabled = false;
         self.last_message = Some(message);
@@ -212,5 +219,27 @@ mod tests {
         assert_eq!(schedule.next_run_at, 100);
         schedule.complete_active_queue(160);
         assert_eq!(schedule.next_run_at, 160 + 7 * 86_400);
+    }
+
+    #[test]
+    fn resuming_after_a_missed_slot_restarts_the_cycle() {
+        let mut schedule = CrawlSchedule {
+            id: 1,
+            name: ScheduleName::new("测试").unwrap(),
+            tag_ids: vec![1],
+            every_days: 7,
+            queue_interval_secs: 3,
+            enabled: true,
+            next_run_at: 100,
+            last_run_at: None,
+            last_queue_id: None,
+            active_queue_id: None,
+            active_queue_affects_schedule: false,
+            last_message: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        schedule.restart_from_now(200);
+        assert_eq!(schedule.next_run_at, 200 + 7 * 86_400);
     }
 }

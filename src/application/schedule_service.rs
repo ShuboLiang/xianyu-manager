@@ -57,6 +57,7 @@ impl ScheduleService {
 
     pub async fn update(&self, id: i64, input: UpdateSchedule) -> Result<CrawlSchedule, DomainError> {
         let mut schedule = self.get(id).await?;
+        let was_enabled = schedule.enabled;
         if let Some(tag_ids) = &input.tag_ids {
             self.ensure_enabled_tags(tag_ids).await?;
         }
@@ -69,6 +70,10 @@ impl ScheduleService {
             input.enabled,
             input.next_run_at,
         )?;
+        // 重新启用时：未来执行点保持不变；暂停期间已错过的执行点不补跑，改为从此刻重新计时。
+        if !was_enabled && schedule.enabled && schedule.next_run_at <= now_unix() {
+            schedule.restart_from_now(now_unix());
+        }
         self.schedules.update(&schedule).await?;
         Ok(schedule)
     }
