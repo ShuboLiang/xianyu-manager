@@ -9,6 +9,7 @@ use super::ai_conversation::{
 use super::ai_provider::{AiProvider, NewAiProvider};
 use super::ai_tool_call::{AiToolCall, NewAiToolCall};
 use super::crawl_queue::{CrawlEntry, CrawlQueue, QueueStatus};
+use super::crawl_schedule::{CrawlSchedule, NewCrawlSchedule};
 use super::crawl_task::CrawlTask;
 use super::error::DomainError;
 use super::item::Item;
@@ -147,6 +148,15 @@ pub trait QueueRepository: Send + Sync {
     async fn reset_running_entries(&self) -> Result<(), DomainError>;
     /// 删除队列及其全部条目，返回是否真的删除了记录
     async fn delete_queue(&self, id: i64) -> Result<bool, DomainError>;
+}
+
+#[async_trait]
+pub trait ScheduleRepository: Send + Sync {
+    async fn create(&self, schedule: &NewCrawlSchedule) -> Result<CrawlSchedule, DomainError>;
+    async fn find(&self, id: i64) -> Result<Option<CrawlSchedule>, DomainError>;
+    async fn list(&self) -> Result<Vec<CrawlSchedule>, DomainError>;
+    async fn update(&self, schedule: &CrawlSchedule) -> Result<(), DomainError>;
+    async fn delete(&self, id: i64) -> Result<bool, DomainError>;
 }
 
 #[async_trait]

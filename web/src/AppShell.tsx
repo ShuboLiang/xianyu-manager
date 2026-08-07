@@ -12,6 +12,7 @@ import {
 } from 'antd';
 import {
   DashboardOutlined,
+  CalendarOutlined,
   InboxOutlined,
   LineChartOutlined,
   MessageOutlined,
@@ -33,6 +34,7 @@ const NAV_ITEMS = [
   { key: '/', icon: <DashboardOutlined />, label: '概览' },
   { key: '/products', icon: <ShoppingOutlined />, label: '商品管理' },
   { key: '/tags', icon: <TagsOutlined />, label: '标签管理' },
+  { key: '/schedules', icon: <CalendarOutlined />, label: '定时任务' },
   { key: '/items', icon: <InboxOutlined />, label: '抓取数据' },
   { key: '/trends', icon: <LineChartOutlined />, label: '价格趋势' },
   { type: 'divider' as const },

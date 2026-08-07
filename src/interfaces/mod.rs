@@ -6,6 +6,7 @@ pub mod dto;
 pub mod item_handler;
 pub mod product_handler;
 pub mod queue_handler;
+pub mod schedule_handler;
 pub mod stats_handler;
 pub mod tag_handler;
 
@@ -28,6 +29,7 @@ use crate::application::crawl_service::CrawlService;
 use crate::application::item_service::ItemService;
 use crate::application::product_service::ProductService;
 use crate::application::queue_service::QueueService;
+use crate::application::schedule_service::ScheduleService;
 use crate::application::stats_service::StatsService;
 use crate::application::tag_service::TagService;
 use crate::application::trend_service::TrendService;
@@ -42,6 +44,7 @@ pub struct AppState {
     pub tag_service: Arc<TagService>,
     pub product_service: Arc<ProductService>,
     pub queue_service: Arc<QueueService>,
+    pub schedule_service: Arc<ScheduleService>,
     pub ai_provider_service: Arc<AiProviderService>,
     pub ai_settings_service: Arc<AiSettingsService>,
     pub ai_tool_call_service: Arc<AiToolCallService>,
@@ -134,6 +137,17 @@ pub fn build_router(state: AppState, static_dir: &str) -> Router {
         .route("/queues/{id}/resume", post(queue_handler::resume_queue))
         .route("/queues/{id}/cancel", post(queue_handler::cancel_queue))
         .route("/queues/{id}/name", put(queue_handler::rename_queue))
+        .route(
+            "/schedules",
+            get(schedule_handler::list_schedules).post(schedule_handler::create_schedule),
+        )
+        .route(
+            "/schedules/{id}",
+            get(schedule_handler::get_schedule)
+                .put(schedule_handler::update_schedule)
+                .delete(schedule_handler::delete_schedule),
+        )
+        .route("/schedules/{id}/run", post(schedule_handler::run_now))
         // AI 配置
         .route("/ai/status", get(ai_handler::ai_status))
         .route(

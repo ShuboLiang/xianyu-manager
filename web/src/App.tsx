@@ -11,6 +11,7 @@ import { ItemsPage } from '@/pages/ItemsPage';
 import { OverviewPage } from '@/pages/OverviewPage';
 import { ProductsPage } from '@/pages/ProductsPage';
 import { TagsPage } from '@/pages/TagsPage';
+import { SchedulesPage } from '@/pages/SchedulesPage';
 import { TrendsPage } from '@/pages/TrendsPage';
 
 const queryClient = new QueryClient({
@@ -72,6 +73,7 @@ export default function App() {
                   <Route index element={<OverviewPage />} />
                   <Route path="products" element={<ProductsPage />} />
                   <Route path="tags" element={<TagsPage />} />
+                  <Route path="schedules" element={<SchedulesPage />} />
                   <Route path="items" element={<ItemsPage />} />
                   <Route path="trends" element={<TrendsPage />} />
                   <Route path="assistant" element={<AiAssistantPage />} />

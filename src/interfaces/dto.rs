@@ -11,6 +11,7 @@ use crate::domain::ai_conversation::{Conversation, ConversationMessage};
 use crate::domain::ai_provider::AiProvider;
 use crate::domain::ai_tool_call::AiToolCall;
 use crate::domain::crawl_queue::Selector;
+use crate::domain::crawl_schedule::CrawlSchedule;
 use crate::domain::crawl_task::{CrawlTask, TaskStatus};
 use crate::domain::item::Item;
 use crate::domain::product::Product;
@@ -334,6 +335,76 @@ impl From<QueueProgress> for QueueResponse {
             done: p.done,
             failed: p.failed,
             skipped: p.skipped,
+        }
+    }
+}
+
+// ---------- 定时抓取任务 ----------
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ScheduleCreateRequest {
+    pub name: String,
+    #[ts(type = "Array<number>")]
+    pub tag_ids: Vec<i64>,
+    pub every_days: u32,
+    pub queue_interval_secs: Option<u32>,
+    #[ts(type = "number | null")]
+    pub first_run_at: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ScheduleUpdateRequest {
+    pub name: Option<String>,
+    #[ts(type = "Array<number> | null")]
+    pub tag_ids: Option<Vec<i64>>,
+    pub every_days: Option<u32>,
+    pub queue_interval_secs: Option<u32>,
+    pub enabled: Option<bool>,
+    #[ts(type = "number | null")]
+    pub next_run_at: Option<u64>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct ScheduleResponse {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub name: String,
+    #[ts(type = "Array<number>")]
+    pub tag_ids: Vec<i64>,
+    pub every_days: u32,
+    pub queue_interval_secs: u32,
+    pub enabled: bool,
+    #[ts(type = "number")]
+    pub next_run_at: u64,
+    #[ts(type = "number | null")]
+    pub last_run_at: Option<u64>,
+    #[ts(type = "number | null")]
+    pub last_queue_id: Option<i64>,
+    pub last_message: Option<String>,
+    #[ts(type = "number")]
+    pub created_at: u64,
+    #[ts(type = "number")]
+    pub updated_at: u64,
+}
+
+impl From<CrawlSchedule> for ScheduleResponse {
+    fn from(s: CrawlSchedule) -> Self {
+        Self {
+            id: s.id,
+            name: s.name.as_str().to_string(),
+            tag_ids: s.tag_ids,
+            every_days: s.every_days,
+            queue_interval_secs: s.queue_interval_secs,
+            enabled: s.enabled,
+            next_run_at: s.next_run_at,
+            last_run_at: s.last_run_at,
+            last_queue_id: s.last_queue_id,
+            last_message: s.last_message,
+            created_at: s.created_at,
+            updated_at: s.updated_at,
         }
     }
 }

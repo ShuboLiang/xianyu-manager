@@ -22,6 +22,7 @@ use application::item_service::ItemService;
 use application::ports::XianYuGateway;
 use application::product_service::ProductService;
 use application::queue_service::QueueService;
+use application::schedule_service::ScheduleService;
 use application::stats_service::StatsService;
 use application::tag_service::TagService;
 use application::trend_service::TrendService;
@@ -31,7 +32,7 @@ use infrastructure::persistence::memory::{
 };
 use infrastructure::persistence::sqlite::{
     self, SqliteAiProviderRepository, SqliteAiToolCallRepository, SqliteConversationRepository,
-    SqliteItemRepository, SqliteProductRepository, SqliteQueueRepository,
+    SqliteItemRepository, SqliteProductRepository, SqliteQueueRepository, SqliteScheduleRepository,
     SqliteSettingsRepository, SqliteTagRepository,
 };
 use infrastructure::webbridge_client::{launch_webbridge_daemon, WebBridgeClient};
@@ -57,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let tag_repo = Arc::new(SqliteTagRepository::new(pool.clone()));
     let product_repo = Arc::new(SqliteProductRepository::new(pool.clone()));
     let queue_repo = Arc::new(SqliteQueueRepository::new(pool.clone()));
+    let schedule_repo = Arc::new(SqliteScheduleRepository::new(pool.clone()));
     let ai_provider_repo = Arc::new(SqliteAiProviderRepository::new(pool.clone()));
     let ai_tool_call_repo = Arc::new(SqliteAiToolCallRepository::new(pool.clone()));
     let conversation_repo = Arc::new(SqliteConversationRepository::new(pool.clone()));
@@ -162,11 +164,12 @@ async fn main() -> anyhow::Result<()> {
     let queue_service = Arc::new(QueueService::new(
         queue_repo,
         product_repo.clone(),
-        tag_repo,
+        tag_repo.clone(),
         gateway,
         item_repo.clone(),
         crawler,
     ));
+    let schedule_service = Arc::new(ScheduleService::new(schedule_repo, tag_repo, queue_service.clone()));
 
     let stats_service = Arc::new(StatsService::new(item_repo, product_repo));
 
@@ -192,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
+    schedule_service.start_worker();
 
     // interfaces：HTTP 路由
     let app = interfaces::build_router(
@@ -201,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
             tag_service,
             product_service,
             queue_service,
+            schedule_service,
             ai_provider_service,
             ai_settings_service,
             ai_tool_call_service,

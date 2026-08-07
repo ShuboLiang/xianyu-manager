@@ -14,12 +14,13 @@ use crate::domain::ai_provider::{
 };
 use crate::domain::ai_tool_call::{AiToolCall, NewAiToolCall};
 use crate::domain::crawl_queue::{CrawlEntry, CrawlQueue, EntryStatus, QueueStatus};
+use crate::domain::crawl_schedule::{CrawlSchedule, NewCrawlSchedule, ScheduleName};
 use crate::domain::error::DomainError;
 use crate::domain::item::Item;
 use crate::domain::product::{NewProduct, Product, ProductName};
 use crate::domain::repository::{
     AiProviderRepository, AiToolCallRepository, ConversationRepository, ItemRepository, Page,
-    ProductRepository, ProductSortColumn, QueueRepository, SettingsRepository, TagRepository,
+    ProductRepository, ProductSortColumn, QueueRepository, ScheduleRepository, SettingsRepository, TagRepository,
 };
 use crate::domain::tag::{NewTag, Tag, TagName};
 
@@ -164,6 +165,37 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             status     TEXT NOT NULL,
             error      TEXT,
             crawled_at INTEGER
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    // 定时任务本身独立存储；标签是动态筛选条件，不把商品快照放进这里。
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS crawl_schedules (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                     TEXT NOT NULL UNIQUE,
+            every_days               INTEGER NOT NULL,
+            queue_interval_secs      INTEGER NOT NULL,
+            enabled                  INTEGER NOT NULL DEFAULT 1,
+            next_run_at              INTEGER NOT NULL,
+            last_run_at              INTEGER,
+            last_queue_id            INTEGER,
+            last_message             TEXT,
+            created_at               INTEGER NOT NULL,
+            updated_at               INTEGER NOT NULL
+        )",
+    )
+    .execute(&*pool)
+    .await
+    .map_err(to_infra)?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS crawl_schedule_tags (
+            schedule_id INTEGER NOT NULL REFERENCES crawl_schedules(id) ON DELETE CASCADE,
+            tag_id      INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (schedule_id, tag_id)
         )",
     )
     .execute(&*pool)
@@ -946,6 +978,153 @@ fn row_to_queue(row: &SqliteRow) -> Result<CrawlQueue, DomainError> {
         name_custom: row.get::<i64, _>("name_custom") != 0,
         created_at: row.get::<i64, _>("created_at") as u64,
         finished_at: row.get::<Option<i64>, _>("finished_at").map(|t| t as u64),
+    })
+}
+
+// ---------- 定时抓取任务 ----------
+
+pub struct SqliteScheduleRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteScheduleRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+const SCHEDULE_SELECT: &str = "SELECT s.*, (
+        SELECT GROUP_CONCAT(st.tag_id) FROM crawl_schedule_tags st WHERE st.schedule_id = s.id
+    ) AS tag_ids FROM crawl_schedules s";
+
+#[async_trait]
+impl ScheduleRepository for SqliteScheduleRepository {
+    async fn create(&self, schedule: &NewCrawlSchedule) -> Result<CrawlSchedule, DomainError> {
+        let now = crate::domain::crawl_task::now_unix();
+        let mut tx = self.pool.begin().await.map_err(to_infra)?;
+        let result = sqlx::query(
+            "INSERT INTO crawl_schedules
+             (name, every_days, queue_interval_secs, enabled, next_run_at, last_run_at, last_queue_id, last_message, created_at, updated_at)
+             VALUES (?, ?, ?, 1, ?, NULL, NULL, NULL, ?, ?)",
+        )
+        .bind(schedule.name.as_str())
+        .bind(schedule.every_days as i64)
+        .bind(schedule.queue_interval_secs as i64)
+        .bind(schedule.first_run_at as i64)
+        .bind(now as i64)
+        .bind(now as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(to_infra)?;
+        let id = result.last_insert_rowid();
+        save_schedule_tag_links(&mut tx, id, &schedule.tag_ids).await?;
+        tx.commit().await.map_err(to_infra)?;
+        Ok(CrawlSchedule {
+            id,
+            name: schedule.name.clone(),
+            tag_ids: schedule.tag_ids.clone(),
+            every_days: schedule.every_days,
+            queue_interval_secs: schedule.queue_interval_secs,
+            enabled: true,
+            next_run_at: schedule.first_run_at,
+            last_run_at: None,
+            last_queue_id: None,
+            last_message: None,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn find(&self, id: i64) -> Result<Option<CrawlSchedule>, DomainError> {
+        let row = sqlx::query(&format!("{SCHEDULE_SELECT} WHERE s.id = ?"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        row.as_ref().map(row_to_schedule).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<CrawlSchedule>, DomainError> {
+        let rows = sqlx::query(&format!("{SCHEDULE_SELECT} ORDER BY s.next_run_at ASC, s.id ASC"))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        rows.iter().map(row_to_schedule).collect()
+    }
+
+    async fn update(&self, schedule: &CrawlSchedule) -> Result<(), DomainError> {
+        let mut tx = self.pool.begin().await.map_err(to_infra)?;
+        sqlx::query(
+            "UPDATE crawl_schedules SET name = ?, every_days = ?, queue_interval_secs = ?, enabled = ?,
+             next_run_at = ?, last_run_at = ?, last_queue_id = ?, last_message = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(schedule.name.as_str())
+        .bind(schedule.every_days as i64)
+        .bind(schedule.queue_interval_secs as i64)
+        .bind(schedule.enabled)
+        .bind(schedule.next_run_at as i64)
+        .bind(schedule.last_run_at.map(|v| v as i64))
+        .bind(schedule.last_queue_id)
+        .bind(&schedule.last_message)
+        .bind(schedule.updated_at as i64)
+        .bind(schedule.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(to_infra)?;
+        sqlx::query("DELETE FROM crawl_schedule_tags WHERE schedule_id = ?")
+            .bind(schedule.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(to_infra)?;
+        save_schedule_tag_links(&mut tx, schedule.id, &schedule.tag_ids).await?;
+        tx.commit().await.map_err(to_infra)
+    }
+
+    async fn delete(&self, id: i64) -> Result<bool, DomainError> {
+        let result = sqlx::query("DELETE FROM crawl_schedules WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(to_infra)?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+async fn save_schedule_tag_links(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    schedule_id: i64,
+    tag_ids: &[i64],
+) -> Result<(), DomainError> {
+    for tag_id in tag_ids {
+        sqlx::query("INSERT OR IGNORE INTO crawl_schedule_tags (schedule_id, tag_id) VALUES (?, ?)")
+            .bind(schedule_id)
+            .bind(tag_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(to_infra)?;
+    }
+    Ok(())
+}
+
+fn row_to_schedule(row: &SqliteRow) -> Result<CrawlSchedule, DomainError> {
+    let tag_ids = row
+        .get::<Option<String>, _>("tag_ids")
+        .map(|s| s.split(',').filter_map(|p| p.parse().ok()).collect())
+        .unwrap_or_default();
+    Ok(CrawlSchedule {
+        id: row.get("id"),
+        name: ScheduleName::new(row.get::<String, _>("name"))
+            .map_err(|e| DomainError::Infrastructure(format!("crawl_schedules 行数据非法: {e}")))?,
+        tag_ids,
+        every_days: row.get::<i64, _>("every_days") as u32,
+        queue_interval_secs: row.get::<i64, _>("queue_interval_secs") as u32,
+        enabled: row.get::<i64, _>("enabled") != 0,
+        next_run_at: row.get::<i64, _>("next_run_at") as u64,
+        last_run_at: row.get::<Option<i64>, _>("last_run_at").map(|v| v as u64),
+        last_queue_id: row.get("last_queue_id"),
+        last_message: row.get("last_message"),
+        created_at: row.get::<i64, _>("created_at") as u64,
+        updated_at: row.get::<i64, _>("updated_at") as u64,
     })
 }
 

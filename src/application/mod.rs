@@ -8,6 +8,7 @@ pub mod item_service;
 pub mod ports;
 pub mod product_service;
 pub mod queue_service;
+pub mod schedule_service;
 pub mod stats_service;
 pub mod tag_service;
 pub mod trend_service;

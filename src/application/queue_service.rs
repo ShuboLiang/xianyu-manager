@@ -21,6 +21,7 @@ use crate::domain::repository::{
 
 /// 入队目标：选择器或显式商品 id 列表，二选一
 #[derive(Debug)]
+#[derive(Clone)]
 pub enum EnqueueTarget {
     Selector(Selector),
     ProductIds(Vec<i64>),

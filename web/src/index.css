@@ -11,3 +11,19 @@ body {
   font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
 }
+
+/* 定时任务表格包含周期、时间和结果等信息；窄屏保留可读列宽并允许横向查看，
+   不让表格为硬塞进视口而把中文拆成单字。 */
+.schedules-page .ant-table-wrapper {
+  overflow: hidden;
+}
+
+@media (max-width: 767px) {
+  .schedules-page .ant-card-body {
+    padding: 12px 8px;
+  }
+
+  .schedules-page .ant-table-cell {
+    white-space: nowrap;
+  }
+}

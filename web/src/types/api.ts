@@ -14,6 +14,7 @@ import type { ProductBriefResponse } from './generated/ProductBriefResponse';
 import type { ProductResponse } from './generated/ProductResponse';
 import type { QueueResponse } from './generated/QueueResponse';
 import type { SelectorDto } from './generated/SelectorDto';
+import type { ScheduleResponse } from './generated/ScheduleResponse';
 import type { TagResponse } from './generated/TagResponse';
 
 // 泛型响应包装：Rust 侧 ApiResponse<T> 不经 ts-rs 导出（泛型），形状固定，手写即可
@@ -45,6 +46,7 @@ export type ClassifySuggestion = ClassifySuggestionDto;
 export type ClassifyTask = ClassifyTaskResponse;
 export type ClassifyWarning = ClassifyWarningDto;
 export type CrawlPrompt = CrawlPromptResponse;
+export type Schedule = ScheduleResponse;
 
 // ---------- 全局统计 ----------
 
