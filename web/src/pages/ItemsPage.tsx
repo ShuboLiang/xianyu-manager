@@ -255,13 +255,14 @@ export function ItemsPage() {
             {
               title: '商品名',
               dataIndex: 'product_name',
-              width: 140,
+              width: 150,
               ellipsis: true,
               render: (v: string | null) => v || <Typography.Text type="secondary">-</Typography.Text>,
             },
             {
               title: '标题',
               dataIndex: 'title',
+              width: 280,
               // 闲鱼标题信息量大，最多展示两行，悬浮可见全文
               render: (v: string) => (
                 <span
@@ -330,6 +331,7 @@ export function ItemsPage() {
             showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
           }}
+          scroll={{ x: 1_080 }}
         />
         </Space>
       </Card>

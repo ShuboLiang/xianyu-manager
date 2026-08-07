@@ -413,10 +413,11 @@ export function ProductsPage() {
     query.sortBy === key ? (query.sortDir === 'asc' ? ('ascend' as const) : ('descend' as const)) : null;
 
   const columns: ColumnsType<Product> = [
-    { title: '商品名', dataIndex: 'name', ellipsis: true },
+    { title: '商品名', dataIndex: 'name', width: 160, ellipsis: true },
     {
       title: '标签',
       key: 'tags',
+      width: 145,
       render: (_, p) =>
         p.tag_names.length ? (
           <Space size={4} wrap>
@@ -436,6 +437,7 @@ export function ProductsPage() {
       sorter: true,
       sortOrder: sortOrderOf('median_price'),
       align: 'right',
+      width: 100,
       render: (v: number | null) => <span className="num">{fmtPrice(v)}</span>,
     },
     {
@@ -444,6 +446,7 @@ export function ProductsPage() {
       sorter: true,
       sortOrder: sortOrderOf('avg_price'),
       align: 'right',
+      width: 100,
       render: (v: number | null) => <span className="num">{fmtPrice(v)}</span>,
     },
     {
@@ -452,6 +455,7 @@ export function ProductsPage() {
       sorter: true,
       sortOrder: sortOrderOf('mode_price'),
       align: 'right',
+      width: 120,
       render: (v: number | null) => {
         // 档宽与后端 mode_bucket_width 规则一致：按价格量级自适应
         const w = v === null ? 0 : v < 100 ? 10 : v < 1000 ? 50 : v < 10000 ? 100 : 500;
@@ -468,6 +472,7 @@ export function ProductsPage() {
       sorter: true,
       sortOrder: sortOrderOf('crawled_count'),
       align: 'right',
+      width: 90,
       render: (v: number | null) => <span className="num">{v ?? '-'}</span>,
     },
     {
@@ -475,6 +480,7 @@ export function ProductsPage() {
       dataIndex: 'last_crawled_at',
       sorter: true,
       sortOrder: sortOrderOf('last_crawled_at'),
+      width: 145,
       render: (v: number | null) => (
         <span className="num" style={{ fontSize: 12 }}>
           {fmtTime(v)}
@@ -487,6 +493,7 @@ export function ProductsPage() {
       sorter: true,
       sortOrder: sortOrderOf('recycle_price'),
       align: 'right',
+      width: 135,
       render: (v: number | null, p) =>
         recycleEditingId === p.id ? (
           <Space.Compact size="small">
@@ -527,6 +534,7 @@ export function ProductsPage() {
     {
       title: '备注',
       dataIndex: 'remark',
+      width: 150,
       ellipsis: true,
       render: (v: string | null) => v || <Typography.Text type="secondary">-</Typography.Text>,
     },
@@ -703,6 +711,7 @@ export function ProductsPage() {
               showSizeChanger: true,
               showTotal: (t) => `共 ${t} 条`,
             }}
+            scroll={{ x: 1_380 }}
           />
         </Space>
       </Card>
