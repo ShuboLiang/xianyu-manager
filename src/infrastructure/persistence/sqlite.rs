@@ -60,6 +60,38 @@ pub async fn connect(path: &str) -> Result<SqlitePool, DomainError> {
     Ok(pool)
 }
 
+#[cfg(test)]
+mod schedule_repo_tests {
+    use super::*;
+    use crate::domain::crawl_schedule::{NewCrawlSchedule, ScheduleName};
+
+    #[tokio::test]
+    async fn schedule_repo_persists_active_queue_state() {
+        let pool = connect(":memory:").await.unwrap();
+        sqlx::query("INSERT INTO tags (id, name, created_at, updated_at) VALUES (1, '显卡', 0, 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let repo = SqliteScheduleRepository::new(pool);
+        let mut schedule = repo
+            .create(&NewCrawlSchedule {
+                name: ScheduleName::new("每周显卡").unwrap(),
+                tag_ids: vec![1],
+                every_days: 7,
+                queue_interval_secs: 3,
+                first_run_at: 100,
+            })
+            .await
+            .unwrap();
+        schedule.mark_queue_started(100, 42, true, "已创建队列".into());
+        repo.update(&schedule).await.unwrap();
+
+        let loaded = repo.find(schedule.id).await.unwrap().unwrap();
+        assert_eq!(loaded.active_queue_id, Some(42));
+        assert!(loaded.active_queue_affects_schedule);
+    }
+}
+
 /// 初始化全部表结构（IF NOT EXISTS，可重复执行）
 async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
     sqlx::query(
@@ -182,6 +214,8 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
             next_run_at              INTEGER NOT NULL,
             last_run_at              INTEGER,
             last_queue_id            INTEGER,
+            active_queue_id          INTEGER,
+            active_queue_affects_schedule INTEGER NOT NULL DEFAULT 0,
             last_message             TEXT,
             created_at               INTEGER NOT NULL,
             updated_at               INTEGER NOT NULL
@@ -190,6 +224,29 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), DomainError> {
     .execute(&*pool)
     .await
     .map_err(to_infra)?;
+
+    // 定时任务上线后追加的完成后计时状态；老库升级时不丢已有任务。
+    let schedule_cols = sqlx::query("PRAGMA table_info(crawl_schedules)")
+        .fetch_all(&*pool)
+        .await
+        .map_err(to_infra)?;
+    let schedule_col_names: Vec<String> = schedule_cols.iter().map(|r| r.get("name")).collect();
+    if !schedule_col_names.iter().any(|c| c == "active_queue_id") {
+        sqlx::query("ALTER TABLE crawl_schedules ADD COLUMN active_queue_id INTEGER")
+            .execute(&*pool)
+            .await
+            .map_err(to_infra)?;
+        tracing::info!("crawl_schedules 表迁移：补充 active_queue_id 列");
+    }
+    if !schedule_col_names.iter().any(|c| c == "active_queue_affects_schedule") {
+        sqlx::query(
+            "ALTER TABLE crawl_schedules ADD COLUMN active_queue_affects_schedule INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&*pool)
+        .await
+        .map_err(to_infra)?;
+        tracing::info!("crawl_schedules 表迁移：补充 active_queue_affects_schedule 列");
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS crawl_schedule_tags (
@@ -1004,8 +1061,9 @@ impl ScheduleRepository for SqliteScheduleRepository {
         let mut tx = self.pool.begin().await.map_err(to_infra)?;
         let result = sqlx::query(
             "INSERT INTO crawl_schedules
-             (name, every_days, queue_interval_secs, enabled, next_run_at, last_run_at, last_queue_id, last_message, created_at, updated_at)
-             VALUES (?, ?, ?, 1, ?, NULL, NULL, NULL, ?, ?)",
+             (name, every_days, queue_interval_secs, enabled, next_run_at, last_run_at, last_queue_id,
+              active_queue_id, active_queue_affects_schedule, last_message, created_at, updated_at)
+             VALUES (?, ?, ?, 1, ?, NULL, NULL, NULL, 0, NULL, ?, ?)",
         )
         .bind(schedule.name.as_str())
         .bind(schedule.every_days as i64)
@@ -1029,6 +1087,8 @@ impl ScheduleRepository for SqliteScheduleRepository {
             next_run_at: schedule.first_run_at,
             last_run_at: None,
             last_queue_id: None,
+            active_queue_id: None,
+            active_queue_affects_schedule: false,
             last_message: None,
             created_at: now,
             updated_at: now,
@@ -1056,7 +1116,8 @@ impl ScheduleRepository for SqliteScheduleRepository {
         let mut tx = self.pool.begin().await.map_err(to_infra)?;
         sqlx::query(
             "UPDATE crawl_schedules SET name = ?, every_days = ?, queue_interval_secs = ?, enabled = ?,
-             next_run_at = ?, last_run_at = ?, last_queue_id = ?, last_message = ?, updated_at = ? WHERE id = ?",
+             next_run_at = ?, last_run_at = ?, last_queue_id = ?, active_queue_id = ?,
+             active_queue_affects_schedule = ?, last_message = ?, updated_at = ? WHERE id = ?",
         )
         .bind(schedule.name.as_str())
         .bind(schedule.every_days as i64)
@@ -1065,6 +1126,8 @@ impl ScheduleRepository for SqliteScheduleRepository {
         .bind(schedule.next_run_at as i64)
         .bind(schedule.last_run_at.map(|v| v as i64))
         .bind(schedule.last_queue_id)
+        .bind(schedule.active_queue_id)
+        .bind(schedule.active_queue_affects_schedule)
         .bind(&schedule.last_message)
         .bind(schedule.updated_at as i64)
         .bind(schedule.id)
@@ -1122,6 +1185,8 @@ fn row_to_schedule(row: &SqliteRow) -> Result<CrawlSchedule, DomainError> {
         next_run_at: row.get::<i64, _>("next_run_at") as u64,
         last_run_at: row.get::<Option<i64>, _>("last_run_at").map(|v| v as u64),
         last_queue_id: row.get("last_queue_id"),
+        active_queue_id: row.get("active_queue_id"),
+        active_queue_affects_schedule: row.get::<i64, _>("active_queue_affects_schedule") != 0,
         last_message: row.get("last_message"),
         created_at: row.get::<i64, _>("created_at") as u64,
         updated_at: row.get::<i64, _>("updated_at") as u64,

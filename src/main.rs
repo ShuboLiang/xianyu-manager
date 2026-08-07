@@ -195,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 启动恢复 + 拉起全局抓取 worker
     queue_service.start_worker().await?;
-    schedule_service.start_worker();
+    schedule_service.start_worker().await?;
 
     // interfaces：HTTP 路由
     let app = interfaces::build_router(

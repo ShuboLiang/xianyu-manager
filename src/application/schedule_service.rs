@@ -86,11 +86,15 @@ impl ScheduleService {
         if !schedule.enabled {
             return Err(DomainError::InvalidState("定时任务已暂停，恢复后才能立即执行".into()));
         }
+        if schedule.active_queue_id.is_some() {
+            return Err(DomainError::InvalidState("本任务已有队列正在执行或排队，不能重复启动".into()));
+        }
         self.execute(schedule, false).await
     }
 
     /// 启动常驻调度器；一分钟粒度足以满足“每 N 天”的第一版语义。
-    pub fn start_worker(self: &Arc<Self>) {
+    pub async fn start_worker(self: &Arc<Self>) -> Result<(), DomainError> {
+        self.recover_active_queues().await?;
         let this = Arc::clone(self);
         tokio::spawn(async move {
             loop {
@@ -100,11 +104,18 @@ impl ScheduleService {
                 tokio::time::sleep(Duration::from_secs(30)).await;
             }
         });
+        Ok(())
     }
 
     async fn process_due(&self) -> Result<(), DomainError> {
         let now = now_unix();
         for schedule in self.schedules.list().await? {
+            if schedule.active_queue_id.is_some() {
+                if let Err(e) = self.reconcile_active_queue(schedule).await {
+                    tracing::error!("检查定时任务关联队列失败: {e}");
+                }
+                continue;
+            }
             if schedule.enabled && schedule.next_run_at <= now {
                 if let Err(e) = self.execute(schedule, true).await {
                     tracing::error!("执行定时任务失败: {e}");
@@ -121,18 +132,8 @@ impl ScheduleService {
     ) -> Result<CrawlSchedule, DomainError> {
         let now = now_unix();
 
-        // 同一任务上次生成的队列尚未结束时不再叠加队列，防止慢任务越积越多。
-        if let Some(queue_id) = schedule.last_queue_id {
-            if let Ok(progress) = self.queues.get_progress(queue_id).await {
-                if matches!(progress.queue.status, QueueStatus::Waiting | QueueStatus::Running | QueueStatus::Paused) {
-                    schedule.mark_run(now, None, "上次队列尚未结束，本次已跳过".into());
-                    if advance_schedule {
-                        schedule.advance_to_next_slot(now);
-                    }
-                    self.schedules.update(&schedule).await?;
-                    return Ok(schedule);
-                }
-            }
+        if schedule.active_queue_id.is_some() {
+            return Err(DomainError::InvalidState("本任务已有尚未结束的队列".into()));
         }
 
         if let Err(e) = self.ensure_enabled_tags(&schedule.tag_ids).await {
@@ -147,29 +148,61 @@ impl ScheduleService {
         });
         match self.queues.preview(target.clone()).await {
             Ok(preview) if preview.to_add.is_empty() => {
-                schedule.mark_run(
+                schedule.mark_check(
                     now,
-                    None,
                     format!("无可入队商品（{} 个已在活跃队列）", preview.skipped.len()),
+                    advance_schedule,
                 );
             }
             Ok(_) => match self.queues.enqueue(target, schedule.queue_interval_secs).await {
                 Ok((queue, result)) => {
-                    schedule.mark_run(
+                    schedule.mark_queue_started(
                         now,
-                        Some(queue.id),
+                        queue.id,
+                        advance_schedule,
                         format!("已创建队列 #{}：新增 {} 个，跳过 {} 个", queue.id, result.to_add.len(), result.skipped.len()),
                     );
                 }
-                Err(e) => schedule.mark_run(now, None, format!("入队失败：{e}")),
+                Err(e) => schedule.mark_check(now, format!("入队失败：{e}"), advance_schedule),
             },
-            Err(e) => schedule.mark_run(now, None, format!("预览失败：{e}")),
-        }
-        if advance_schedule {
-            schedule.advance_to_next_slot(now);
+            Err(e) => schedule.mark_check(now, format!("预览失败：{e}"), advance_schedule),
         }
         self.schedules.update(&schedule).await?;
         Ok(schedule)
+    }
+
+    /// 队列处于 waiting/running/paused 时保持占位；进入终态才从 finished_at 起计算下一轮。
+    async fn reconcile_active_queue(&self, mut schedule: CrawlSchedule) -> Result<(), DomainError> {
+        let queue_id = schedule.active_queue_id.expect("caller checked active queue id");
+        match self.queues.get_progress(queue_id).await {
+            Ok(progress) if matches!(progress.queue.status, QueueStatus::Waiting | QueueStatus::Running | QueueStatus::Paused) => Ok(()),
+            Ok(progress) => {
+                schedule.complete_active_queue(progress.queue.finished_at.unwrap_or_else(now_unix));
+                self.schedules.update(&schedule).await
+            }
+            Err(DomainError::NotFound(_)) => {
+                schedule.lose_active_queue(now_unix());
+                self.schedules.update(&schedule).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 兼容升级前已创建的任务：若最后一个队列尚未结束，启动时把它认领为当前队列。
+    async fn recover_active_queues(&self) -> Result<(), DomainError> {
+        for mut schedule in self.schedules.list().await? {
+            if schedule.active_queue_id.is_some() {
+                continue;
+            }
+            let Some(queue_id) = schedule.last_queue_id else { continue };
+            if let Ok(progress) = self.queues.get_progress(queue_id).await {
+                if matches!(progress.queue.status, QueueStatus::Waiting | QueueStatus::Running | QueueStatus::Paused) {
+                    schedule.restore_active_queue(queue_id);
+                    self.schedules.update(&schedule).await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn ensure_enabled_tags(&self, tag_ids: &[i64]) -> Result<(), DomainError> {

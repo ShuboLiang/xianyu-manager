@@ -383,6 +383,8 @@ pub struct ScheduleResponse {
     pub last_run_at: Option<u64>,
     #[ts(type = "number | null")]
     pub last_queue_id: Option<i64>,
+    #[ts(type = "number | null")]
+    pub active_queue_id: Option<i64>,
     pub last_message: Option<String>,
     #[ts(type = "number")]
     pub created_at: u64,
@@ -402,6 +404,7 @@ impl From<CrawlSchedule> for ScheduleResponse {
             next_run_at: s.next_run_at,
             last_run_at: s.last_run_at,
             last_queue_id: s.last_queue_id,
+            active_queue_id: s.active_queue_id,
             last_message: s.last_message,
             created_at: s.created_at,
             updated_at: s.updated_at,

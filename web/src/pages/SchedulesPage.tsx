@@ -170,7 +170,22 @@ export function SchedulesPage() {
       render: (ids: number[]) => ids.map((id) => <Tag key={id}>{tagName(id)}</Tag>),
     },
     { title: '周期', dataIndex: 'every_days', width: 105, render: (days: number) => `每 ${days} 天` },
-    { title: '下次执行', dataIndex: 'next_run_at', width: 175, render: (v: number) => fmtTime(v) },
+    {
+      title: '下次执行',
+      dataIndex: 'next_run_at',
+      width: 175,
+      render: (v: number, row: Schedule) =>
+        row.active_queue_id ? (
+          <Space direction="vertical" size={0}>
+            <Tag color="processing" style={{ margin: 0 }}>本轮进行中</Tag>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              等待队列结束后计时
+            </Typography.Text>
+          </Space>
+        ) : (
+          fmtTime(v)
+        ),
+    },
     {
       title: '最近结果',
       dataIndex: 'last_message',
@@ -269,7 +284,7 @@ export function SchedulesPage() {
             <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
           </Form.Item>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            到点后会重新按所选标签筛选商品；若上次生成的队列尚未结束，本次自动跳过，避免任务堆积。
+            到点后会重新按所选标签筛选商品；队列结束后才开始计算下一周期，不会并发或积压。
           </Typography.Text>
         </Form>
       </Modal>

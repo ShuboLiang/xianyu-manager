@@ -49,6 +49,10 @@ pub struct CrawlSchedule {
     pub next_run_at: u64,
     pub last_run_at: Option<u64>,
     pub last_queue_id: Option<i64>,
+    /// 当前仍未结束的队列；存在时本任务不会重复入队。
+    pub active_queue_id: Option<i64>,
+    /// 当前队列结束后是否要以结束时间为起点重新计时（立即执行为 false）。
+    pub active_queue_affects_schedule: bool,
     pub last_message: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
@@ -90,23 +94,61 @@ impl CrawlSchedule {
         Ok(())
     }
 
-    pub fn mark_run(&mut self, now: u64, queue_id: Option<i64>, message: String) {
+    pub fn mark_check(&mut self, now: u64, message: String, advance_schedule: bool) {
         self.last_run_at = Some(now);
-        if queue_id.is_some() {
-            self.last_queue_id = queue_id;
+        self.last_message = Some(message);
+        if advance_schedule {
+            self.schedule_after(now);
         }
+        self.touch();
+    }
+
+    /// 队列已创建后不再推进 next_run_at；必须等队列到终态才开始下一周期。
+    pub fn mark_queue_started(
+        &mut self,
+        now: u64,
+        queue_id: i64,
+        affects_schedule: bool,
+        message: String,
+    ) {
+        self.last_run_at = Some(now);
+        self.last_queue_id = Some(queue_id);
+        self.active_queue_id = Some(queue_id);
+        self.active_queue_affects_schedule = affects_schedule;
         self.last_message = Some(message);
         self.touch();
     }
 
-    /// 按原本的时间轴推进，服务停机后只合并成下一次未来执行点，不补跑积压周期。
-    pub fn advance_to_next_slot(&mut self, now: u64) {
-        let interval = self.every_days as u64 * 86_400;
-        let mut next = self.next_run_at.saturating_add(interval);
-        while next <= now {
-            next = next.saturating_add(interval);
+    /// 当前队列结束：定时触发的队列以结束时间为起点重新计时；立即执行不改原计划。
+    pub fn complete_active_queue(&mut self, finished_at: u64) {
+        let affects_schedule = self.active_queue_affects_schedule;
+        self.active_queue_id = None;
+        self.active_queue_affects_schedule = false;
+        if affects_schedule {
+            self.schedule_after(finished_at);
+            self.last_message = Some("本轮队列已结束，已从完成时间开始计算下一周期".into());
+        } else {
+            self.last_message = Some("立即执行队列已结束，原定时计划未改变".into());
         }
-        self.next_run_at = next;
+        self.touch();
+    }
+
+    /// 服务重启兼容：旧版本已创建但尚未结束的队列在启动时重新认领。
+    pub fn restore_active_queue(&mut self, queue_id: i64) {
+        self.active_queue_id = Some(queue_id);
+        self.active_queue_affects_schedule = true;
+        self.touch();
+    }
+
+    /// 关联队列被历史清理而无法得知结束时间时，从当前时刻重新开始周期，避免立即重复入队。
+    pub fn lose_active_queue(&mut self, now: u64) {
+        let affects_schedule = self.active_queue_affects_schedule;
+        self.active_queue_id = None;
+        self.active_queue_affects_schedule = false;
+        if affects_schedule {
+            self.schedule_after(now);
+            self.last_message = Some("关联队列记录已清理，已从当前时间重新计算下一周期".into());
+        }
         self.touch();
     }
 
@@ -118,6 +160,10 @@ impl CrawlSchedule {
 
     fn touch(&mut self) {
         self.updated_at = now_unix();
+    }
+
+    fn schedule_after(&mut self, base: u64) {
+        self.next_run_at = base.saturating_add(self.every_days as u64 * 86_400);
     }
 }
 
@@ -138,4 +184,33 @@ fn validate_settings(tag_ids: &[i64], every_days: u32, queue_interval_secs: u32)
         return Err(DomainError::InvalidInput("抓取间隔必须在 1 至 3600 秒之间".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_queue_waits_until_completion_before_starting_next_cycle() {
+        let mut schedule = CrawlSchedule {
+            id: 1,
+            name: ScheduleName::new("测试").unwrap(),
+            tag_ids: vec![1],
+            every_days: 7,
+            queue_interval_secs: 3,
+            enabled: true,
+            next_run_at: 100,
+            last_run_at: None,
+            last_queue_id: None,
+            active_queue_id: None,
+            active_queue_affects_schedule: false,
+            last_message: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        schedule.mark_queue_started(100, 9, true, "已入队".into());
+        assert_eq!(schedule.next_run_at, 100);
+        schedule.complete_active_queue(160);
+        assert_eq!(schedule.next_run_at, 160 + 7 * 86_400);
+    }
 }
